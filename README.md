@@ -25,12 +25,15 @@ references/
   math-normalization.md         公式归一化 8 条规则，附真实前后对照
 scripts/
   mineru_ocr.py                 OCR 提交/轮询/下载（含失败回退）
+  build_markdown.py             从 OCR 结果装配 Markdown（核心脚本）
   normalize_math.py             公式归一化（可作库调用，也可命令行）
   extract_formulas.py           从 Markdown 抽取公式
   validate_output.py            交付前结构校验
   validate_math.cjs             KaTeX 全量公式编译校验
   preview_server.py             本地 Markdown + KaTeX 预览
   _selftest.py                  归一化规则自测
+examples/
+  RESULTS.md                    真实课件处理的效果对照（含图片）
 ```
 
 ## 核心流程
@@ -76,6 +79,10 @@ npm install katex          # 仅公式校验与预览需要
 ```bash
 # OCR（需要 MINERU_API_TOKEN）
 python scripts/mineru_ocr.py submit --out-root ./ocr-out *.pdf
+
+# 装配成 Markdown（可带源文件校错与内嵌原图）
+python scripts/build_markdown.py --raw ./ocr-out/raw --out ./知识库 \
+    --source-dir ./课件 --source-glob '*.pptx' --pdf-dir ./课件PDF
 
 # 公式归一化
 python scripts/normalize_math.py fix notes.md > notes-fixed.md

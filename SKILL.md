@@ -65,8 +65,19 @@ description: 把扫描件、PDF、PPT、教材、讲义、论文、试卷等文�
 
 ### 5. 组织正文结构
 
+从 OCR 结果装配 Markdown 用 `scripts/build_markdown.py`，它把上面第 2–5 步串起来：
+
+```bash
+python scripts/build_markdown.py --raw ./ocr-out/raw --out ./知识库 \
+    --source-dir ./课件 --source-glob '*.pptx' --pdf-dir ./课件PDF
+```
+
+它负责：按页面顺序重建正文、把源文件原生文字用于校错、优先取内嵌原图（按内容哈希去重）、丢弃落在图片区域内的标签文字、合并被切成多块的同一幅图、公式归一化、表格转 Markdown、输出 `build-report.json` 记录统计与待确认项。
+
+结构上的要求（脚本已实现，手工整理时同样适用）：
+
 - **按知识结构合并连续内容**，不要把每页做成一个小节。同一小节跨多页时合并成一个小节。
-- **同名小节不要重复生成标题**。同一标题在多页顶部重复出现（PPT 常见）只保留一次。
+- **同名小节不要重复生成标题**。同一标题在多页重复出现（PPT 常见）只保留一次。
 - **标题层级不能跳跃**：如果章节从 `###` 开始而前面没有 `##`，要补一级或降为 `##`。
 - 标题里不要残留 LaTeX 命令，把 `\mathrm{R}^2` 这类转成可读文本（`R²`）。
 - 页眉页脚、页码、书名等重复元素全部丢弃。
@@ -127,9 +138,12 @@ python scripts/_selftest.py
 - `references/mineru-api.md` — MinerU API 契约、结果结构、连接问题处理
 - `references/math-normalization.md` — 公式归一化规则与实例
 - `scripts/mineru_ocr.py` — OCR 提交与结果下载（含 fake-IP 回退）
+- `scripts/build_markdown.py` — 从 OCR 结果装配 Markdown（核心脚本）
 - `scripts/normalize_math.py` — 公式归一化函数
 - `scripts/extract_formulas.py` — 从 Markdown 抽取公式
 - `scripts/validate_output.py` — 交付前 Markdown 校验
 - `scripts/validate_math.cjs` — KaTeX 全量公式编译校验
 - `scripts/preview_server.py` — 本地图文预览服务
 - `scripts/_selftest.py` — 归一化规则自测（改脚本后跑）
+
+真实处理效果的对照示例见仓库的 `examples/RESULTS.md`。
