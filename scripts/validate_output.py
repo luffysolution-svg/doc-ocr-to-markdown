@@ -34,7 +34,7 @@ try:
 except ImportError:
     Image = None
 
-from normalize_math import MATH_SPAN, paren_issues
+from normalize_math import MATH_SPAN, paren_issues, scan_math, protected_markdown
 
 # 不该出现在交付内容里的编辑痕迹
 LEAK_PATTERNS = [
@@ -70,8 +70,9 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
         if re.search(pattern, text, re.M):
             warnings.append(f'{name}: 存在{label}')
 
-    # 标题结构
-    headings = re.findall(r'^(#{1,6})\s+(.*)$', text, re.M)
+    # Ignore headings shown as code examples.
+    visible_text = protected_markdown(text)
+    headings = re.findall(r'^(#{1,6})\s+(.*)$', visible_text, re.M)
     if sum(1 for h, _ in headings if h == '#') != 1:
         errors.append(f'{name}: 一级标题数量为 {sum(1 for h,_ in headings if h=="#")}，应为 1')
     levels = [len(h) for h, _ in headings]
@@ -83,19 +84,17 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
             errors.append(f'{name}: 标题含公式残留「{title[:40]}」')
 
     # 公式
-    math_spans = list(MATH_SPAN.finditer(text))
+    math_spans, syntax_issues = scan_math(text)
+    for issue in syntax_issues:
+        errors.append(f'{name}:{issue["line"]}: {issue["error"]}')
     for match in math_spans:
-        raw = match.group()
-        body = (raw[2:-2] if raw.startswith('$$') else raw[1:-1]).strip()
+        body = match.body.strip()
         if not body:
             errors.append(f'{name}: 空公式')
         elif body.startswith('$') or body.endswith('$'):
             errors.append(f'{name}: 公式定界符异常「{body[:40]}」')
     for issue in paren_issues(text):
         warnings.append(f'{name}: 括号不配平「{issue}」')
-    remainder = MATH_SPAN.sub('', text)
-    if re.search(r'(?<!\\)\$', remainder):
-        warnings.append(f'{name}: 有未配对的 $')
 
     # 图片引用与链接
     images = tables = 0
@@ -111,17 +110,24 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
                 if not dest:
                     continue
                 parts = urlsplit(dest)
-                if parts.scheme:
+                if parts.scheme or parts.netloc:
                     if child.type == 'image':
                         errors.append(f'{name}: 图片使用绝对/远程地址 {dest}')
                     continue
-                target = (path.parent / unquote(parts.path)).resolve()
+                decoded = unquote(parts.path).replace('\\', '/')
+                target = (path.parent / decoded).resolve()
+                if child.type == 'image':
+                    asset_root = images_dir.parent.resolve() if images_dir else path.parent.resolve()
+                    if decoded.startswith('/') or not target.is_relative_to(asset_root):
+                        errors.append(f'{name}: 图片路径越出知识库 {dest}')
+                        continue
                 if not target.exists():
                     errors.append(f'{name}: 链接失效 {dest}')
                     continue
                 if child.type == 'image':
                     images += 1
-                    image_hashes[unquote(parts.path)] += 1
+                    asset_root = images_dir.parent.resolve() if images_dir else path.parent.resolve()
+                    image_hashes[target.relative_to(asset_root).as_posix()] += 1
                     alt = child.attrGet('alt') or ''
                     if any(c in alt for c in ('$', '\\', '{', '}')):
                         errors.append(f'{name}: 图片说明含公式符号（会破坏 image 标签）「{alt[:40]}」')
@@ -158,8 +164,6 @@ def validate(root: Path, images_dir: Path | None) -> dict:
         documents.append(summary)
 
     duplicates = [name for name, count in image_hashes.items() if count > 1]
-    if duplicates:
-        warnings.append(f'{len(duplicates)} 张图片被重复引用（同一张图是否应只出现一次？）')
 
     if images_dir and images_dir.exists():
         orphans = [f for f in images_dir.rglob('*.*')

@@ -1,0 +1,11 @@
+[
+  {"type":"text","text":"理想气体的等温膨胀（原创合成示例）","text_level":1,"page_idx":0,"bbox":[85,50,915,105]},
+  {"type":"text","text":"本例是本仓库原创的合成材料，不摘录教材。OCR JSON 为手工构造的装配 fixture，并非云端识别结果。","page_idx":0,"bbox":[85,125,915,205]},
+  {"type":"text","text":"1.1 过程与功的约定","text_level":1,"page_idx":0,"bbox":[85,225,915,265]},
+  {"type":"text","text":"取一摩尔理想气体，温度保持为 300 K。气体从 1.0 L 可逆膨胀到 2.0 L。忽略其他形式的功，采用“环境对系统做功为正”的约定。","page_idx":0,"bbox":[85,280,915,375]},
+  {"type":"equation","text":"pV=nRT","text_format":"latex","page_idx":0,"bbox":[85,395,915,435]},
+  {"type":"text","text":"下图只表示体积增大，活塞位置不按比例绘制。","page_idx":0,"bbox":[85,455,915,490]},
+  {"type":"image","img_path":"images/expansion.png","image_caption":["原创活塞膨胀示意"],"page_idx":0,"bbox":[85,500,915,690]},
+  {"type":"text","text":"气体膨胀时外压沿可逆路径变化，体积功为：","page_idx":0,"bbox":[85,715,915,755]},
+  {"type":"equation","text":"w=-\\int_{V_1}^{V_2}p_{\\mathrm{ext}}\\,\\mathrm{d}V=-nRT\\ln\\frac{V_2}{V_1}","text_format":"latex","page_idx":0,"bbox":[85,775,915,855]}
+]

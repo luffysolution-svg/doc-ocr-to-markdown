@@ -30,15 +30,19 @@ import hashlib
 import io
 import json
 import re
-import shutil
 import sys
-from collections import defaultdict, deque
+import tempfile
+from collections import defaultdict
+from contextlib import ExitStack
+from urllib.parse import quote
+
+from build_support import Publisher, asset_path, contained, load_book, read_items, relative_name, RESERVED
 from difflib import SequenceMatcher
 from pathlib import Path
 from unicodedata import normalize
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from normalize_math import normalize_math, plain_text, split_leading_prose
+from normalize_math import normalize_math, plain_text, split_leading_prose, process
 
 try:
     from PIL import Image
@@ -166,39 +170,43 @@ class FigureStore:
 
     def __init__(self, image_dir: Path):
         self.image_dir = image_dir
-        self.emitted: set[str] = set()
         self.count = 0
 
     def store(self, blob: bytes, ext: str) -> str | None:
-        digest = hashlib.sha1(blob).hexdigest()[:12]
-        name = f'{digest}.{"jpg" if ext.lower() in ("jpg", "jpeg") else "png"}'
+        if Image is None:
+            raise RuntimeError('需要 Pillow 校验图片')
+        with Image.open(io.BytesIO(blob)) as im:
+            im.load()
+            if im.format in ('PNG', 'JPEG'):
+                ext = 'jpg' if im.format == 'JPEG' else 'png'
+            else:
+                buffer = io.BytesIO()
+                im.convert('RGBA').save(buffer, format='PNG')
+                blob, ext = buffer.getvalue(), 'png'
+        digest = hashlib.sha256(blob).hexdigest()
+        name = f'{digest}.{ext}'
+        self.image_dir.mkdir(parents=True, exist_ok=True)
         target = self.image_dir / name
         if not target.exists():
-            if ext.lower() in ('png', 'jpg', 'jpeg'):
-                target.write_bytes(blob)
-            elif Image is not None:
-                with Image.open(io.BytesIO(blob)) as im:
-                    im.convert('RGB').save(target)
-            else:
-                return None
+            target.write_bytes(blob)
         return name
 
     def crop(self, pdf_page, box: tuple, scale: int = 1920) -> bytes | None:
-        """从 PDF 页面按归一化坐标高清裁图（源文件里没有这张图时的退路）。"""
+        """裁图失败交还调用方，由其尝试原 OCR 图。"""
         try:
             import fitz
-        except ImportError:
+            x0 = max(0.0, box[0]) * pdf_page.rect.width
+            y0 = max(0.0, box[1]) * pdf_page.rect.height
+            x1 = min(1.0, box[2]) * pdf_page.rect.width
+            y1 = min(1.0, box[3]) * pdf_page.rect.height
+            if x1 <= x0 or y1 <= y0:
+                return None
+            factor = scale / pdf_page.rect.width
+            pix = pdf_page.get_pixmap(matrix=fitz.Matrix(factor, factor),
+                                      clip=fitz.Rect(x0, y0, x1, y1), alpha=False)
+            return pix.tobytes('png')
+        except Exception:
             return None
-        x0 = max(0.0, box[0]) * pdf_page.rect.width
-        y0 = max(0.0, box[1]) * pdf_page.rect.height
-        x1 = min(1.0, box[2]) * pdf_page.rect.width
-        y1 = min(1.0, box[3]) * pdf_page.rect.height
-        if x1 <= x0 or y1 <= y0:
-            return None
-        factor = scale / pdf_page.rect.width
-        pix = pdf_page.get_pixmap(matrix=fitz.Matrix(factor, factor),
-                                  clip=fitz.Rect(x0, y0, x1, y1), alpha=False)
-        return pix.tobytes('png')
 
 
 # ---------------------------------------------------------------- 主装配
@@ -206,7 +214,7 @@ class FigureStore:
 def captions_of(items: list[dict]) -> list[str]:
     values = []
     for item in items:
-        for field in ('image_caption', 'chart_caption', 'image_footnote', 'chart_footnote'):
+        for field in ('image_caption', 'chart_caption', 'table_caption', 'image_footnote', 'chart_footnote'):
             content = item.get(field) or []
             if isinstance(content, str):
                 content = [content]
@@ -227,8 +235,8 @@ def table_markdown(html: str, store: FigureStore | None = None, ocr_dir: Path | 
     """MinerU 的 table_body 是 HTML，转成 Markdown 表格，并安全提取嵌入在单元格内的图片（如二维码、图标）。"""
     try:
         from bs4 import BeautifulSoup
-    except ImportError:
-        return ''
+    except ImportError as exc:
+        raise RuntimeError('需要 beautifulsoup4 转换表格') from exc
     soup = BeautifulSoup(html, 'html.parser')
     table = soup.find('table')
     if not table:
@@ -238,14 +246,13 @@ def table_markdown(html: str, store: FigureStore | None = None, ocr_dir: Path | 
     if store is not None and ocr_dir is not None and image_dir_name:
         for img in table.find_all('img'):
             src = img.get('src') or ''
-            src_path = (ocr_dir / src.replace('\\', '/')).resolve()
-            if src_path.is_file():
-                saved_name = store.store(src_path.read_bytes(), src_path.suffix.lstrip('.'))
-                if saved_name:
-                    alt = img.get('alt', '表内图')
-                    img.replace_with(f'![{alt}](images/{image_dir_name}/{saved_name})')
-            else:
-                img.replace_with('')
+            src_path = asset_path(ocr_dir, src)
+            if not src_path.is_file():
+                raise ValueError(f'缺少表格内嵌图片: {src_path}')
+            saved_name = store.store(src_path.read_bytes(), src_path.suffix.lstrip('.'))
+            if saved_name:
+                alt = re.sub(r'[\[\]\n|]', ' ', img.get('alt', '表内图'))
+                img.replace_with(f'![{alt}](images/{image_dir_name}/{saved_name})')
 
     grid, spans = [], {}
     for ri, tr in enumerate(table.find_all('tr')):
@@ -298,105 +305,146 @@ def match_source(folder_name: str, sources: dict[str, Path], ordinal: int) -> Pa
     return None
 
 
+def full_page_scan(item: dict) -> bool:
+    x0, y0, x1, y1 = box_of(item)
+    return x1 - x0 >= 0.95 and y1 - y0 >= 0.95
+
+
+def image_groups(items: list[dict]) -> dict[int, list[dict]]:
+    """Merge overlapping fragments without changing OCR order or merging references.
+
+    Identical asset paths/boxes remain independent references. A text/table/equation
+    between two images is a hard boundary; a full-page scan is never a fragment.
+    """
+    groups = {}
+    index = 0
+    while index < len(items):
+        item = items[index]
+        if item.get('type') not in ('image', 'chart') or full_page_scan(item):
+            index += 1
+            continue
+        group = [item]
+        cursor = index + 1
+        while cursor < len(items):
+            other = items[cursor]
+            if other.get('type') not in ('image', 'chart') or full_page_scan(other):
+                break
+            box, ob = union_box([box_of(g) for g in group]), box_of(other)
+            same_reference = any(
+                (other.get('img_path') and other.get('img_path') == g.get('img_path')
+                 and other.get('_ocr_dir') == g.get('_ocr_dir')) or ob == box_of(g)
+                for g in group)
+            if same_reference or max(overlap(ob, box), overlap(box, ob)) < 0.35:
+                break
+            group.append(other)
+            cursor += 1
+        groups[index] = group
+        index = cursor
+    return groups
+
+
+def inline_math(text: str) -> str:
+    """Use the shared context-aware normalizer, verified by test_math.py.
+
+    It protects code and Markdown links and keeps explicit math delimiters.
+    """
+    return process(text)
+
+
 def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: Path | None,
                   image_dir: Path, title: str, review: list,
                   ocr_dir: Path | None = None, mode: str = 'slides',
                   page_offset: int = 0, keep_table_images: bool = False) -> tuple[str, dict]:
     store = FigureStore(image_dir)
-    content = [f'# {title}']
-    headings: set[str] = set()
-    last_heading = None
     stats = defaultdict(int)
-    pdf = None
-    if pdf_path and pdf_path.exists():
-        try:
-            import fitz
-            pdf = fitz.open(pdf_path)
-        except ImportError:
-            pdf = None
-
+    title = re.sub(r'\s+', ' ', title).strip()
+    content = [f'# {title}']
     by_page = defaultdict(list)
     for item in items:
-        by_page[item.get('page_idx', 0)].append(item)
+        pi = item.get('page_idx', 0)
+        if type(pi) is not int or pi < 0:
+            raise ValueError(f'OCR page_idx 越界: {pi!r}')
+        by_page[pi].append(item)
 
-    # 文档标题：优先用页面里检测到的第一个标题，其次用传入的 title
-    doc_title = title
-    for item in items:
-        if item.get('text_level') and item.get('text'):
-            candidate = re.sub(r'\s+', ' ', str(item['text'])).strip()
-            candidate = plain_text(candidate) if ('\\' in candidate or '$' in candidate) else candidate
-            if candidate and nkey(candidate) != nkey(title):
-                doc_title = candidate
-                break
-    if doc_title != title:
-        content = [f'# {doc_title}']
-    else:
-        content = [f'# {title}']
-    title = doc_title
+    with ExitStack() as resources:
+        pdf = None
+        if pdf_path:
+            import fitz
+            pdf = resources.enter_context(fitz.open(pdf_path))
+            if page_offset < 0 or any(pi + page_offset >= len(pdf) for pi in by_page):
+                raise ValueError('OCR 页码超出原 PDF 范围')
+        return _render_pages(by_page, source_pages, pdf, image_dir, title, review,
+                             ocr_dir, mode, page_offset, keep_table_images, store, content, stats)
 
+
+def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
+                  mode, page_offset, keep_table_images, store, content, stats):
+    headings = set()
+    last_heading = None
     for pi in sorted(by_page):
         page_items = by_page[pi]
         actual_pi = pi + page_offset
         source = source_pages[pi] if source_pages and pi < len(source_pages) else None
         used_text: set[int] = set()
-        used_pic: set[int] = set()
         # 图片占据的区域：源文件的图 + OCR 识别出的图块，文字落在里面就是图内标签
         picture_regions = [p['box'] for p in source['pictures']] if source else []
-        picture_regions += [box_of(i) for i in page_items if i.get('type') in ('image', 'chart')]
+        picture_regions += [box_of(i) for i in page_items if i.get('type') in ('image', 'chart') and not full_page_scan(i)]
         figure_blocks: list[str] = []
         emit: list[str] = []
+        groups = image_groups(page_items)
+        grouped_members = {id(member) for group in groups.values() for member in group[1:]}
 
-        for item in page_items:
+        for item_index, item in enumerate(page_items):
             kind = item.get('type')
-            if kind in ('header', 'footer', 'page_number', 'page_footnote', 'discarded'):
+            item_ocr_dir = Path(item['_ocr_dir']) if item.get('_ocr_dir') else ocr_dir
+            if kind in ('header', 'footer', 'page_number', 'discarded'):
                 continue
 
             # ---- 图片 ----
             if kind in ('image', 'chart'):
-                box = box_of(item)
-                # 合并同页相邻/重叠的图片块（一幅图常被切成多块）
-                group = [item]
-                for other in page_items:
-                    if other is item or other.get('type') not in ('image', 'chart'):
-                        continue
-                    ob = box_of(other)
-                    if overlap(ob, box) >= 0.35 or overlap(box, ob) >= 0.35:
-                        group.append(other)
-                for member in group:
-                    if member is not item and member in page_items:
-                        page_items.remove(member)
-
-                name = None
-                match = best_picture_match(box, source['pictures'], used_pic) if source else None
-                if match:
-                    used_pic.add(match[1])
-                    name = store.store(match[2]['blob'], match[2]['ext'])
+                # Validate paths even if a PDF crop would otherwise hide an escape.
+                for member in groups.get(item_index, [item]):
+                    root = Path(member['_ocr_dir']) if member.get('_ocr_dir') else ocr_dir
+                    if root is not None and member.get('img_path'):
+                        asset_path(root, str(member['img_path']))
+                if full_page_scan(item):
+                    stats['full_page_scans_skipped'] += 1
+                    continue
+                if id(item) in grouped_members:
+                    continue
+                group = groups[item_index]
+                box = union_box([box_of(member) for member in group])
+                caps = captions_of(group)
+                names = []
+                match = best_picture_match(box, source['pictures'], set()) if source else None
+                if match and overlap(box, match[2]['box']) >= 0.9:
+                    names.append(store.store(match[2]['blob'], match[2]['ext']))
                     stats['native_figures'] += 1
-                elif pdf is not None and actual_pi < len(pdf):
+                if not names and pdf is not None:
                     blob = store.crop(pdf[actual_pi], box)
                     if blob:
-                        name = store.store(blob, 'png')
+                        names.append(store.store(blob, 'png'))
                         stats['cropped_figures'] += 1
-                elif ocr_dir is not None and item.get('img_path'):
-                    # 最后回退：直接用 OCR 结果自带的切图（通常是页面截图，清晰度较低）
-                    candidate = ocr_dir / str(item['img_path']).replace('\\', '/')
-                    if candidate.is_file():
-                        name = store.store(candidate.read_bytes(), candidate.suffix.lstrip('.'))
+                if not names:
+                    # A failed union crop falls back to every fragment, preserving data.
+                    for member in group:
+                        root = Path(member['_ocr_dir']) if member.get('_ocr_dir') else ocr_dir
+                        if root is None or not member.get('img_path'):
+                            raise ValueError(f'图片裁切失败且缺少 OCR 回退图: page={actual_pi + 1}')
+                        candidate = asset_path(root, str(member['img_path']))
+                        if not candidate.is_file():
+                            raise ValueError(f'缺少 OCR 回退图: {candidate}')
+                        names.append(store.store(candidate.read_bytes(), candidate.suffix.lstrip('.')))
                         stats['ocr_figures'] += 1
-
-                if not name or name in store.emitted:
-                    continue
-                store.emitted.add(name)
-                store.count += 1
-                caps = captions_of(group)
+                names = list(dict.fromkeys(name for name in names if name))
+                store.count += len(names)
                 alt = plain_text(caps[0]) if caps else title
                 alt = re.sub(r'[\[\]\n|]', ' ', alt).strip()
-                fig_markup = f'![{alt}](images/{image_dir.name}/{name})'
                 target_container = emit if mode == 'book' else figure_blocks
-                target_container.append(fig_markup)
+                for name in names:
+                    target_container.append(f'![{alt}](images/{image_dir.name}/{name})')
                 for cap in caps:
-                    if nkey(cap) not in headings:
-                        target_container.append(cap)
+                    target_container.append(inline_math(cap))
                 stats['figures'] += 1
                 continue
 
@@ -410,7 +458,7 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                 if re.search(r'The Ground Truth|According to Rule|provided OCR content|OCR result must', text):
                     continue
                 # 画在图片上的标签：图片文件里已包含，不重复成正文
-                if picture_regions and len(text) <= 12:
+                if mode == 'slides' and picture_regions and len(text) <= 12:
                     item_box = box_of(item)
                     if any(overlap(item_box, region) > 0.6 for region in picture_regions):
                         stats['embedded_labels'] += 1
@@ -419,9 +467,10 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                 # 标题判断逻辑：book 模式遵循严格章节与节号规则，避免页顶正文误升标题
                 if mode == 'book':
                     is_chapter_title = bool(re.match(r'^第[一二三四五六七八九十百\d]+章', text))
-                    sec_match = re.match(r'^([*＊§]?\s*\d+(?:\.\d+)+)', text)
+                    sec_match = re.match(r'^[*＊§]?\s*\d+(?:\.\d+)+\s+\S', text)
                     is_special_heading = text in ('本章基本要求', '拓展学习资源', '复习题', '习题', '附录')
-                    is_heading = bool(item.get('text_level')) or (sec_match and len(text) < 65) or is_chapter_title or is_special_heading
+                    exercise = bool(re.match(r'^(?:[（(]\d+[）)]|\d+[.、)）](?!\d))', text))
+                    is_heading = not exercise and (bool(item.get('text_level')) or (sec_match and len(text) < 65) or is_chapter_title or is_special_heading)
                 else:
                     is_heading = bool(item.get('text_level')) or (box_of(item)[1] < 0.152 and len(text) < 100 and '$' not in text)
 
@@ -435,7 +484,7 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                     level = 2
                     m = re.match(r'^(\d+(?:\.\d+)*)', text)
                     if m:
-                        level = min(5, len(m.group(1).split('.')))
+                        level = max(2, min(5, len(m.group(1).split('.'))))
                     elif re.match(r'^第[一二三四五六七八九十百\d]+章', text):
                         level = 2
                     disp = plain_text(text) if ('\\' in text or '$' in text) else text
@@ -465,15 +514,9 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                             stats['text_review'] += 1
 
                 if nkey(text) != last_heading:
-                    # book 模式跨页段落连贯拼接
-                    if mode == 'book' and emit and pi > sorted(by_page)[0] and not emit[-1].startswith('#') and not emit[-1].startswith('!['):
-                        prev = emit[-1]
-                        if not re.search(r'[。！？；：.!?;:]\s*$', prev) and not re.match(r'^(?:[（(]?\d+[）).、]|[一二三四五六七八九十]+[、.])', text):
-                            sep = ' ' if re.search(r'[A-Za-z0-9]$', prev) and re.match(r'^[A-Za-z0-9]', text) else ''
-                            emit[-1] += sep + text
-                            stats['joined_page_paragraphs'] += 1
-                            continue
-                    emit.append(text)
+                    # Conservative: OCR does not reliably distinguish page continuation
+                    # from a new paragraph. Keep boundaries, including across pages.
+                    emit.append(inline_math(text))
                     stats['paragraphs'] += 1
                 continue
 
@@ -498,11 +541,11 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
             # ---- 表格 ----
             if kind == 'table':
                 for cap in captions_of([item]):
-                    emit.append(cap)
-                md = table_markdown(item.get('table_body', ''), store=store, ocr_dir=ocr_dir,
+                    emit.append(inline_math(cap))
+                md = table_markdown(item.get('table_body', ''), store=store, ocr_dir=item_ocr_dir,
                                     image_dir_name=image_dir.name)
                 if md:
-                    emit.append(md)
+                    emit.append(inline_math(md))
                     stats['tables'] += 1
                 if keep_table_images and pdf is not None and actual_pi < len(pdf):
                     blob = store.crop(pdf[actual_pi], box_of(item))
@@ -511,16 +554,17 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                         if t_name:
                             emit.append(f'![数据表原图](images/{image_dir.name}/{t_name})')
                             stats['table_images'] += 1
-                for note in (item.get('table_footnote') or []):
+                notes = item.get('table_footnote') or []
+                for note in ([notes] if isinstance(notes, str) else notes):
                     if isinstance(note, str) and note.strip():
-                        emit.append(note.strip())
+                        emit.append(inline_math(note.strip()))
                 continue
 
             # ---- 列表 / 代码 ----
             if kind == 'list':
                 for entry in item.get('list_items', []):
                     if str(entry).strip():
-                        emit.append('- ' + str(entry).strip())
+                        emit.append('- ' + inline_math(str(entry).strip()))
                 continue
             if kind in ('code', 'algorithm'):
                 body = item.get('code_body') or item.get('text', '')
@@ -530,14 +574,11 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
             if item.get('text'):
                 text = re.sub(r'[ \t]+', ' ', str(item['text'])).strip()
                 if text and not LABEL_ONLY.match(text):
-                    emit.append(text)
+                    emit.append(inline_math(text))
 
         if mode == 'slides':
             content.extend(figure_blocks)
         content.extend(emit)
-
-    if pdf:
-        pdf.close()
 
     text = '\n\n'.join(b for b in content if b and b.strip())
     text = re.sub(r'\n{3,}', '\n\n', text)
@@ -550,8 +591,9 @@ def main() -> None:
     parser.add_argument('--raw', required=True, help='OCR 结果目录（含各文件的 content_list.json）')
     parser.add_argument('--out', required=True, help='输出目录')
     parser.add_argument('--mode', choices=['slides', 'book'], default='slides',
-                        help='排版模式：slides 为课件幻灯片（图片置顶、原生PPT纠错），book 为教材/长文档（自然图文流混排、严格章节层级、跨页段落合并）')
-    parser.add_argument('--clean', action='store_true', help='执行前清空输出目录（默认不清空，安全增量覆写）')
+                        help='slides 图片置顶；book 自然图文顺序、严格标题；保守保留跨页段落边界')
+    parser.add_argument('--clean', action='store_true', help='已禁用：拒绝目录清理')
+    parser.add_argument('--overwrite', action='store_true', help='显式覆盖所有权清单中已被修改的生成文件，绝不覆盖未登记文件')
     parser.add_argument('--manifest', help='分片清单 JSON 路径（支持多批块大文档组装与全局页码偏移计算）')
     parser.add_argument('--chapters', help='章节划分 JSON 路径（按起止页重组为规范教材章节）')
     parser.add_argument('--pdf', help='整本原 PDF 文件路径（用于高清裁切原图与数据表原图）')
@@ -563,143 +605,136 @@ def main() -> None:
     parser.add_argument('--titles', help='JSON 文件：{"data_id": "章节标题"}')
     args = parser.parse_args()
 
+    if args.clean:
+        parser.error('--clean 已禁用：不会清理任何目录')
+    if bool(args.manifest) != bool(args.chapters):
+        parser.error('--manifest 与 --chapters 必须一起提供')
     raw_root = Path(args.raw).resolve()
-    out_root = Path(args.out).resolve()
-    if args.clean and out_root.exists():
-        shutil.rmtree(out_root)
-    (out_root / 'images').mkdir(parents=True, exist_ok=True)
-
-    # ------------------------------------------------ 分片多批块教材装配流
-    if args.manifest and args.chapters:
-        manifest = json.loads(Path(args.manifest).read_text(encoding='utf-8'))
-        sections = json.loads(Path(args.chapters).read_text(encoding='utf-8'))
-        pdf_path = Path(args.pdf).resolve() if args.pdf else None
-        if not pdf_path and manifest.get('source'):
-            pdf_path = Path(manifest['source']).resolve()
-
-        blocks = []
-        for part in manifest['parts']:
-            folder = raw_root / part['id']
-            lists = list(folder.glob('*_content_list.json'))
-            if not lists:
-                continue
-            for item in json.loads(lists[0].read_text(encoding='utf-8')):
-                item = dict(item)
-                item['_page'] = item.get('page_idx', 0) + part.get('start_page', 1)
-                item['_folder'] = str(folder)
-                blocks.append(item)
-
-        report = []
-        for sec in sections:
-            start, end = sec['start'], sec['end']
-            title = sec['title']
-            filename = sec.get('file', f"{sec['id']}.md")
-            selected = [b for b in blocks if start <= b['_page'] <= end]
-            image_dir = out_root / 'images' / sec['id']
-            image_dir.mkdir(parents=True, exist_ok=True)
-            # 建立连续页索引供 build_chapter 处理
-            remapped = []
-            for b in selected:
-                remapped.append({**b, 'page_idx': b['_page'] - start})
-            review = []
-            text, stats = build_chapter(
-                remapped, None, pdf_path, image_dir, title, review,
-                ocr_dir=raw_root, mode='book', page_offset=start - 1,
-                keep_table_images=args.keep_table_images
-            )
-            (out_root / filename).write_text(text, encoding='utf-8')
-            report.append({'id': sec['id'], 'file': filename, 'title': title, **stats})
-            print(f'{filename}: {stats}', flush=True)
-
-        lines = ['# 目录', '']
-        for entry in report:
-            lines.append(f'- [{entry["title"]}]({entry["file"]})')
-        (out_root / '00-目录.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
-        (out_root / 'build-report.json').write_text(
-            json.dumps({'chapters': report, 'mode': 'book'}, ensure_ascii=False, indent=2),
-            encoding='utf-8')
-        print(f'\n教材模式装配完成，共 {len(report)} 章节。')
-        return
-
-    # ------------------------------------------------ 单文档 / 课件常规装配流
-    titles = json.loads(Path(args.titles).read_text(encoding='utf-8')) if args.titles else {}
+    # Preserve the supplied final component so Publisher can reject output symlinks.
+    out_root = Path(args.out).absolute()
+    if not raw_root.is_dir():
+        parser.error(f'OCR 目录不存在: {raw_root}')
+    if out_root.resolve().is_relative_to(raw_root) or raw_root.is_relative_to(out_root.resolve()):
+        parser.error('输入和输出目录不得相互包含')
+    publisher = Publisher(out_root, args.overwrite)
+    previous = publisher.previous_report()
+    only = set(args.only) if args.only is not None else None
+    if only == set():
+        parser.error('--only 至少需要一个 id')
     sources = {}
     if args.source_dir:
         for path in sorted(Path(args.source_dir).glob(args.source_glob)):
             stem = re.sub(r'^\d+[\s\-_]*', '', path.stem).strip()
             sources[path.stem] = path
             sources[stem] = path
-
-    report, review_all = [], {}
-    folders = sorted(d for d in raw_root.iterdir() if d.is_dir())
-    if args.only:
-        folders = [d for d in folders if d.name in set(args.only)]
-    if not folders:
-        raise SystemExit(f'{raw_root} 下没有找到结果目录')
-
-    for ordinal, folder in enumerate(folders):
-        lists = list(folder.glob('*_content_list.json'))
-        if not lists:
-            print(f'跳过 {folder.name}（无 content_list.json）')
-            continue
-        items = json.loads(lists[0].read_text(encoding='utf-8'))
-        title = titles.get(folder.name, folder.name)
-        image_dir = out_root / 'images' / folder.name
-        image_dir.mkdir(parents=True, exist_ok=True)
-
-        source_pages = None
-        source_name = None
-        source_path = match_source(folder.name, sources, ordinal) if sources else None
-        if source_path:
-            source_pages = load_source(source_path)
-            source_name = source_path.name
-
-        pdf_path = None
-        if args.pdf:
-            pdf_path = Path(args.pdf).resolve()
-        elif args.pdf_dir:
-            for candidate in Path(args.pdf_dir).glob('*.pdf'):
-                if (source_name and candidate.stem == source_name) or folder.name in candidate.stem:
-                    pdf_path = candidate
-                    break
-            if pdf_path is None:
-                number = leading_number(folder.name)
-                for candidate in Path(args.pdf_dir).glob('*.pdf'):
-                    if number is not None and leading_number(candidate.stem) == number:
-                        pdf_path = candidate
-                        break
-
-        review: list = []
-        text, stats = build_chapter(
-            items, source_pages, pdf_path, image_dir, title, review,
-            ocr_dir=folder, mode=args.mode, keep_table_images=args.keep_table_images
-        )
-        if nkey(title) == nkey(folder.name) or title == folder.name:
-            filename = f'{folder.name}.md'
+    jobs = []
+    mode = 'book' if args.manifest else args.mode
+    if args.manifest:
+        manifest_path = Path(args.manifest).resolve()
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        sections = json.loads(Path(args.chapters).read_text(encoding='utf-8'))
+        pdf_path = Path(args.pdf).resolve() if args.pdf else None
+        if pdf_path is None and manifest.get('source'):
+            source = Path(manifest['source'])
+            pdf_path = source if source.is_absolute() else manifest_path.parent / source
+        blocks = load_book(raw_root, manifest, sections, pdf_path)
+        identities = {sec['id'] for sec in sections}
+        if only and not only <= identities:
+            raise ValueError(f'--only 未知章节: {sorted(only - identities)}')
+        for sec in sorted(sections, key=lambda sec: sec['start']):
+            if only is not None and sec['id'] not in only:
+                continue
+            items = [{**b, 'page_idx': b['_page'] - sec['start']}
+                     for b in blocks if sec['start'] <= b['_page'] <= sec['end']]
+            jobs.append({'id': sec['id'], 'title': sec['title'],
+                         'file': sec.get('file', f"{sec['id']}.md"),
+                         'items': items, 'pdf': pdf_path, 'offset': sec['start'] - 1,
+                         'source': None, 'ocr_dir': None})
+    else:
+        titles = json.loads(Path(args.titles).read_text(encoding='utf-8')) if args.titles else {}
+        folders = sorted(d for d in raw_root.iterdir() if d.is_dir())
+        identities = {d.name for d in folders}
+        if only and not only <= identities:
+            raise ValueError(f'--only 未知目录: {sorted(only - identities)}')
+        for ordinal, folder in enumerate(folders):
+            if only is not None and folder.name not in only:
+                continue
+            relative_name(folder.name, component=True)
+            folder = contained(raw_root, folder.name)
+            items, ocr_dir = read_items(folder)
+            title = titles.get(folder.name, folder.name)
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError(f'无效标题: {folder.name}')
+            source_path = match_source(folder.name, sources, ordinal) if sources else None
+            pdf_path = Path(args.pdf).resolve() if args.pdf else None
+            if pdf_path is None and args.pdf_dir:
+                candidates = sorted(Path(args.pdf_dir).glob('*.pdf'))
+                pdf_path = next((p for p in candidates if
+                                 (source_path and p.stem == source_path.stem) or folder.name in p.stem), None)
+                if pdf_path is None:
+                    number = leading_number(folder.name)
+                    pdf_path = next((p for p in candidates if number is not None and leading_number(p.stem) == number), None)
+            # IDs are stable output names; titles are content, not filesystem paths.
+            jobs.append({'id': folder.name, 'title': title, 'file': f'{folder.name}.md',
+                         'items': items, 'pdf': pdf_path, 'offset': 0,
+                         'source': load_source(source_path) if source_path else None,
+                         'ocr_dir': ocr_dir})
+    if not jobs:
+        raise ValueError('没有找到可装配的 OCR 结果')
+    if previous.get('chapters') and previous.get('mode') != mode:
+        raise ValueError('已有输出模式不同，请使用新输出目录')
+    files_seen = set()
+    for job in jobs:
+        filename = relative_name(job['file'])
+        if filename.split('/')[0] in RESERVED or Path(filename).suffix.lower() != '.md':
+            raise ValueError(f'章节文件名保留或无效: {filename}')
+        if filename.casefold() in files_seen:
+            raise ValueError(f'重复输出文件: {filename}')
+        files_seen.add(filename.casefold())
+    # Build outside the output tree; failures leave all existing output untouched.
+    with tempfile.TemporaryDirectory(prefix='markdown-build-') as temporary:
+        stage = Path(temporary)
+        updated, review_all = [], dict(previous.get('review', {}))
+        for job in jobs:
+            image_dir = stage / 'images' / job['id']
+            review = []
+            text, stats = build_chapter(
+                job['items'], job['source'], job['pdf'], image_dir, job['title'], review,
+                ocr_dir=job['ocr_dir'], mode=mode, page_offset=job['offset'],
+                keep_table_images=args.keep_table_images)
+            # Images live at output root/images even for nested chapter paths.
+            prefix = '../' * (len(Path(job['file']).parts) - 1)
+            text = text.replace('](images/', '](' + prefix + 'images/')
+            target = contained(stage, job['file'])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding='utf-8')
+            updated.append({'id': job['id'], 'file': job['file'], 'title': job['title'], **stats})
+            review_all[job['id']] = review
+        replacements = {entry['id']: entry for entry in updated}
+        report = [replacements.pop(entry['id'], entry) for entry in previous.get('chapters', [])]
+        report.extend(replacements.values())
+        if args.manifest:
+            order = {sec['id']: i for i, sec in enumerate(sorted(sections, key=lambda s: s['start']))}
+            report.sort(key=lambda e: (order.get(e['id'], len(order)), e['id']))
         else:
-            filename = f'{folder.name}-{title}.md'
-        (out_root / filename).write_text(text, encoding='utf-8')
-        review_all[folder.name] = review
-        report.append({'id': folder.name, 'file': filename, 'title': title, **stats})
-        print(f'{folder.name}: {stats}', flush=True)
-
-    if len(report) > 1:
+            report.sort(key=lambda e: e['id'])
+        if len({e['file'].casefold() for e in report}) != len(report):
+            raise ValueError('输出文件与保留章节冲突')
         lines = ['# 目录', '']
         for entry in report:
-            lines.append(f'- [{entry["title"]}]({entry["file"]})')
-        (out_root / '00-目录.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
-
-    (out_root / 'build-report.json').write_text(
-        json.dumps({'chapters': report, 'review': review_all, 'mode': args.mode}, ensure_ascii=False, indent=2),
-        encoding='utf-8')
-    total = {k: sum(r.get(k, 0) for r in report) for k in
-             ('paragraphs', 'headings', 'equations', 'tables', 'figures',
-              'text_corrected', 'text_review')}
-    print()
-    print('合计：', json.dumps(total, ensure_ascii=False))
-    if total.get('text_review'):
-        print(f'有 {total["text_review"]} 处文字差异待人工确认，见 build-report.json 的 review 字段')
+            label = re.sub(r'[\[\]\n]', ' ', entry['title'])
+            lines.append(f'- [{label}]({quote(entry["file"], safe="/")})')
+        (stage / '00-目录.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        (stage / 'build-report.json').write_text(json.dumps(
+            {'chapters': report, 'review': review_all, 'mode': mode,
+             'paragraph_joining': 'disabled: conservative preservation of OCR paragraph/page boundaries'},
+            ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        publisher.publish(stage)
+    print(f'装配完成：更新 {len(updated)} 章，目录保留 {len(report)} 章')
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        raise SystemExit(f'装配失败: {exc}') from exc

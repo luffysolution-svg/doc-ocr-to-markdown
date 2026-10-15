@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="240" viewBox="0 0 800 240" role="img" aria-labelledby="title desc">
+  <title id="title">Original piston expansion diagram</title>
+  <desc id="desc">A gas expands reversibly at constant temperature from volume V1 to volume V2. The piston positions are schematic.</desc>
+  <rect width="800" height="240" fill="#ffffff"/>
+  <g fill="none" stroke="#243b53" stroke-width="4">
+    <path d="M50 60v130h270V60"/><path d="M480 60v130h270V60"/>
+  </g>
+  <path d="M52 188h266V130H52z" fill="#b8e0ee"/>
+  <path d="M482 188h266V85H482z" fill="#b8e0ee"/>
+  <path d="M45 130h280m150-45h280" stroke="#243b53" stroke-width="8"/>
+  <path d="M185 130V70m430 15V35" stroke="#243b53" stroke-width="8"/>
+  <path d="M350 120h90m-15-12 15 12-15 12" fill="none" stroke="#c05b2c" stroke-width="4"/>
+  <g font-family="sans-serif" font-size="22" fill="#243b53" text-anchor="middle">
+    <text x="185" y="225">V1 = 1.0 L</text><text x="615" y="225">V2 = 2.0 L</text>
+    <text x="400" y="65">T = 300 K</text>
+  </g>
+</svg>

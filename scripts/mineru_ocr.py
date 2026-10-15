@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -95,8 +96,16 @@ def download(url: str, target: Path) -> None:
     raise RuntimeError(f'结果下载失败：{last_error}')
 
 
+def valid_id(value: str) -> str:
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', value):
+        raise ValueError('data_id 必须是 1–64 个英文字母、数字、下划线或连字符，且以字母或数字开头')
+    return value
+
+
 def submit(args) -> None:
     out_root = Path(args.out_root).resolve()
+    if (out_root / 'job.json').exists():
+        raise ValueError('工作目录已有 job.json；用 resume 继续，或为新批次选择新目录')
     out_root.mkdir(parents=True, exist_ok=True)
 
     files: list[Path] = []
@@ -120,6 +129,10 @@ def submit(args) -> None:
     if not files:
         sys.exit('没有输入文件')
 
+    for data_id in ids:
+        valid_id(data_id)
+    if len(set(ids)) != len(ids):
+        raise ValueError('data_id 重复；每份输入必须有独立标识')
     specs = [{'name': f.name, 'data_id': d, 'is_ocr': True} for f, d in zip(files, ids)]
     data = api('POST', '/file-urls/batch', {
         'files': specs,
@@ -171,7 +184,9 @@ def collect(out_root: Path, job: dict, interval: int, timeout: int, quiet: bool)
             previous = snapshot
 
         for result in results:
-            key = result.get('data_id') or Path(result['file_name']).stem
+            key = valid_id(result.get('data_id') or Path(result['file_name']).stem)
+            if key not in wanted:
+                raise ValueError('结果包含未提交的 data_id')
             state = result.get('state')
             if state == 'failed':
                 raise RuntimeError(f'{key} 识别失败：{result.get("err_msg")}')
@@ -232,16 +247,22 @@ def split_pdf(args) -> None:
     src = Path(args.file).resolve()
     if not src.is_file():
         sys.exit(f'文件不存在: {src}')
+    chunk_size = args.chunk_size
+    if not isinstance(chunk_size, int) or chunk_size <= 0:
+        raise ValueError('chunk-size 必须为正整数')
+    prefix = valid_id(args.prefix or 'part')
     out_root = Path(args.out_root).resolve()
     chunks_dir = out_root / 'chunks'
-    chunks_dir.mkdir(parents=True, exist_ok=True)
-
+    if any((out_root / name).exists() for name in ('manifest.json', 'ids.tsv', 'chunks')):
+        raise ValueError('拆分目标已有产物；请使用新的工作目录，避免覆盖')
     doc = fitz.open(src)
     total_pages = len(doc)
-    chunk_size = args.chunk_size
+    if total_pages == 0:
+        doc.close()
+        raise ValueError('PDF 没有页面')
+    chunks_dir.mkdir(parents=True, exist_ok=False)
     manifest = []
     ids = []
-    prefix = args.prefix or 'part'
 
     for index, start in enumerate(range(0, total_pages, chunk_size), 1):
         end = min(start + chunk_size, total_pages)
@@ -260,6 +281,7 @@ def split_pdf(args) -> None:
         })
         ids.append(f'{target}\t{key}')
 
+    doc.close()
     (out_root / 'manifest.json').write_text(
         json.dumps({'source': str(src), 'pages': total_pages, 'chunk_size': chunk_size, 'parts': manifest},
                    ensure_ascii=False, indent=2), encoding='utf-8')

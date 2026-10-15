@@ -1,0 +1,27 @@
+{
+  "kind": "original-synthetic-example",
+  "license": "MIT (same as repository)",
+  "provenance": "Original prose, selected standard physical-chemistry relations, calculated values and original piston diagram created for this repository. No textbook excerpt. OCR-format JSON is handwritten, not a cloud OCR response.",
+  "source_pdf": "source/original.pdf",
+  "source_markdown": "demo.md",
+  "source_pages": 2,
+  "coordinate_system": "bbox normalized 0..1000; page_idx is zero-based within each part; manifest uses one-based physical PDF pages",
+  "fixture_parts": ["part01", "part02"],
+  "expected_output": {
+    "content_documents": 1,
+    "navigation_documents": 1,
+    "display_formulas": 4,
+    "inline_formulas": 0,
+    "figure_references": 1,
+    "text_tables": 1
+  },
+  "audit_points": [
+    "The section on source page 2 follows page 1 after joining two part-local page_idx=0 values.",
+    "The four equations and their symbols match source/original.pdf and demo.md.",
+    "The piston figure appears between the equation of state and work discussion.",
+    "The three data rows and their signs match the source page 2 table.",
+    "The rounded value 1729 J is calculated from 8.314 * 300 * ln(2), not experimental data.",
+    "Browser-check the content page, its four formulas, one image, one table and navigation. Record actual coverage separately."
+  ],
+  "limits": "This fixture exercises assembly and validation interfaces only. It does not evaluate cloud OCR, noisy scans, cross-page paragraphs, continuation tables, chemistry recognition or omitted-word rate."
+}

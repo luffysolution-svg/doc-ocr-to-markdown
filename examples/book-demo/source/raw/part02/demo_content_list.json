@@ -1,0 +1,9 @@
+[
+  {"type":"text","text":"1.2 能量核对","text_level":1,"page_idx":0,"bbox":[85,70,915,115]},
+  {"type":"text","text":"理想气体的内能只依赖温度，等温过程的内能变化为零。根据热力学第一定律，气体吸收的热量与环境对系统做的功互相抵消。","page_idx":0,"bbox":[85,140,915,250]},
+  {"type":"equation","text":"\\Delta U=q+w=0","text_format":"latex","page_idx":0,"bbox":[85,275,915,325]},
+  {"type":"text","text":"为便于复算，气体常数取 8.314 J/(mol·K)，结果保留到整数焦耳。以下数据是上述假设下的计算值，不是实验测量值。","page_idx":0,"bbox":[85,355,915,445]},
+  {"type":"table","table_body":"<table><tr><th>量</th><th>计算值</th><th>说明</th></tr><tr><td>体积比</td><td>2</td><td>终态体积除以初态体积</td></tr><tr><td>环境对系统做功</td><td>−1729 J</td><td>膨胀功为负</td></tr><tr><td>系统吸热</td><td>1729 J</td><td>维持等温</td></tr></table>","page_idx":0,"bbox":[85,470,915,655]},
+  {"type":"equation","text":"q=-w\\approx 1729\\,\\mathrm{J}","text_format":"latex","page_idx":0,"bbox":[85,690,915,745]},
+  {"type":"text","text":"这组结论仅适用于这里给出的理想气体、等温可逆路径和功的符号约定。","page_idx":0,"bbox":[85,780,915,855]}
+]

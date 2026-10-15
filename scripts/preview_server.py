@@ -19,13 +19,14 @@ import argparse
 import html
 import mimetypes
 import re
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote
 
 import markdown
 
-MATH_SPAN = re.compile(r'\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)(?:\\.|[^$\n])*?(?<!\\)\$')
+from normalize_math import scan_math, math_issues
 CDN = 'https://cdn.jsdelivr.net/npm/katex@0.19.0/dist'
 CSS = (
     'body{font-family:"Microsoft YaHei",system-ui,sans-serif;max-width:940px;'
@@ -47,48 +48,75 @@ def render_markdown(text: str) -> str:
     """把 Markdown 转 HTML，公式占位后交由 KaTeX 在浏览器端渲染。"""
     formulas: list[tuple[str, str]] = []
 
-    def stash(match):
-        raw = match.group()
-        display = raw.startswith('$$')
-        tex = raw[2:-2] if display else raw[1:-1]
-        key = f'ZZMATH{len(formulas):06d}ZZ'
-        tag = 'div' if display else 'span'
-        cls = 'math-display' if display else 'math-inline'
-        formulas.append((
-            key,
-            f'<{tag} class="{cls}" data-display="{str(display).lower()}">'
-            f'{html.escape(tex.strip())}</{tag}>',
-        ))
-        return f'\n\n{key}\n\n' if display else key
-
-    text = MATH_SPAN.sub(stash, text)
-    body = markdown.markdown(text, extensions=['tables', 'fenced_code'])
+    spans, issues = scan_math(text)
+    nonce = secrets.token_hex(12)
+    pieces, cursor = [], 0
+    for span in spans:
+        key = f'ZZMATH{nonce}X{len(formulas)}ZZ'
+        tag = 'div' if span.display else 'span'
+        errors = math_issues(span.body)
+        cls = 'math-display' if span.display else 'math-inline'
+        if errors:
+            cls += ' math-error'
+        diagnostic = f' data-error="{html.escape("; ".join(errors), quote=True)}"' if errors else ''
+        formulas.append((key, f'<{tag} class="{cls}" data-display="{str(span.display).lower()}"{diagnostic}>'
+                         f'{html.escape(span.body.strip())}</{tag}>'))
+        pieces.extend((text[cursor:span.start()], f'\n\n{key}\n\n' if span.display else key))
+        cursor = span.end()
+    pieces.append(text[cursor:])
+    body = markdown.markdown(''.join(pieces), extensions=['tables', 'fenced_code', 'footnotes'])
     for key, value in formulas:
         body = body.replace(f'<p>{key}</p>', value).replace(key, value)
+    for issue in issues:
+        body += f'<div class="math-error math-parse-error" data-line="{issue["line"]}">{html.escape(issue["error"])}</div>'
     return body
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
-        request = unquote(self.path.split('?', 1)[0])
-        root: Path = STATE['root']
-
-        if request.startswith('/katex-local/'):
-            target = (Path(STATE['katex']) / request[len('/katex-local/'):]).resolve()
-            self._file(target)
+        # BaseHTTPRequestHandler collapses leading // in self.path. Inspect
+        # the original request-target as well, before that normalization.
+        original_target = self.requestline.split()[1]
+        try:
+            request = unquote(self.path.split('?', 1)[0], errors='strict')
+        except UnicodeError:
+            self.send_error(403, 'Invalid path encoding')
             return
-        if request.startswith('/images/'):
-            target = (root / request.lstrip('/')).resolve()
-            if not target.is_relative_to(root.resolve()):
-                self.send_error(403)
+        if original_target.startswith('//'):
+            self.send_error(403, 'Forbidden path')
+            return
+        root = Path(STATE['root']).resolve()
+        # Reject Windows separators/drive syntax as well as traversal before
+        # resolving; a second encoded layer is rejected rather than redecoded.
+        if ('\\' in request or ':' in request or '\x00' in request
+                or re.search(r'%[0-9a-fA-F]{2}', request)
+                or '..' in request.split('/') or not request.startswith('/')
+                or request.startswith('//')):
+            self.send_error(403, 'Forbidden path')
+            return
+        local_asset = request.startswith('/katex-local/')
+        if local_asset:
+            if STATE['katex'] == CDN:
+                self.send_error(404)
                 return
+            base = Path(STATE['katex']).resolve()
+            relative = request[len('/katex-local/'):]
+        else:
+            base = root
+            relative = '00-目录.md' if request == '/' else request[1:]
+        target = (base / relative).resolve()
+        if not target.is_relative_to(base):
+            self.send_error(403)
+            return
+        if local_asset or request.startswith('/images/'):
             self._file(target)
             return
-
-        target = root / ('00-目录.md' if request == '/' else request.lstrip('/'))
         if request != '/' and not target.suffix:
-            target = target.with_suffix('.md')
-        if not target.is_file() or target.suffix != '.md':
+            target = target.with_suffix('.md').resolve()
+        if not target.is_relative_to(base):
+            self.send_error(403)
+            return
+        if not target.is_file() or target.suffix.lower() != '.md':
             self.send_error(404, 'Not found')
             return
         self._markdown(target)
@@ -107,10 +135,14 @@ class Handler(BaseHTTPRequestHandler):
             + body
             + f'<script src="{prefix}/katex.min.js"></script>'
             '<script>'
-            'for(const node of document.querySelectorAll("[data-display]")){'
+            'const nodes=document.querySelectorAll(".math-inline[data-display],.math-display[data-display]");'
+            'let rendered=0;for(const node of nodes){if(node.classList.contains("math-error"))continue;'
             'try{katex.render(node.textContent,node,{displayMode:node.dataset.display==="true",'
-            'throwOnError:true,strict:false,trust:false});}'
+            'throwOnError:true,strict:false,trust:false});rendered++;}'
             'catch(e){node.classList.add("math-error");node.dataset.error=e.message;}}'
+            'document.documentElement.dataset.formulas=String(nodes.length);'
+            'document.documentElement.dataset.rendered=String(rendered);'
+            'document.documentElement.dataset.mathErrors=String(document.querySelectorAll(".math-error").length);'
             'document.documentElement.dataset.ready="true";'
             '</script></body></html>'
         )

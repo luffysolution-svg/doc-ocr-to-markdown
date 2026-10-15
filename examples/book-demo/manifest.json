@@ -1,0 +1,9 @@
+{
+  "source": "source/original.pdf",
+  "pages": 2,
+  "chunk_size": 1,
+  "parts": [
+    {"id": "part01", "start_page": 1, "end_page": 1, "pages": 1},
+    {"id": "part02", "start_page": 2, "end_page": 2, "pages": 1}
+  ]
+}
