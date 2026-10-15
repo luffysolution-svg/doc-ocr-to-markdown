@@ -1,125 +1,120 @@
 # doc-ocr-to-markdown
 
-把扫描件、PDF、PPT、教材、讲义等文档整理成带公式和图片的 Markdown 知识库 —— 一个给 AI 编码助手用的 [Agent Skill](https://docs.anthropic.com/en/docs/claude-code/skills)。
+把扫描教材、PDF图书、理工科课件、学术论文、讲义等文档整理成带高清图片、表格和可渲染 LaTeX 公式的 Markdown 知识库 —— 一个给 AI 编码助手用的工业级 [Agent Skill](https://docs.anthropic.com/en/docs/claude-code/skills)。
 
-不是简单的文本提取。它处理的是这类文档真正的难点：**公式要还原成可渲染的 LaTeX、图片要清晰、OCR 错字要用源文件校正**。
+不仅是简单的文本提取，它专注解决高难度理工科学术文档的真正痛点：**公式 100% 还原为可渲染的 KaTeX/LaTeX、插图高清去重、表格内二维码完整保留、OCR 错字双轨纠错、500+ 页超长教材智能分片组装**。
 
 ## 解决什么问题
 
-用普通 OCR 把一份带公式的课件转成 Markdown，你通常会得到：
+用普通 OCR 工具直接转换理工科教材或带公式的课件，通常会遇到：
 
-- 公式变成一堆散落的单字符，分式结构和上下标全丢了
-- 插图变成模糊的页面截图，或者干脆没提出来
-- 同音字、形近字错误（"韧致辐射"→ 应为"轫致辐射"、"频率为 v"→ 应为"频率为 ν"）
-- 图片里的标签被当成正文重复一遍
-- 同一张图在连续多页重复出现，知识库里堆满重复文件
+- **公式结构崩解**：散落为孤立字符，上下标、分式和希腊字母错乱；
+- **排版倒置混乱**：课件逻辑盲目把整页图片置顶，长教材阅读顺序颠倒，页顶首句被误提为二级标题；
+- **关键资源丢失**：教材章节末尾的拓展学习二维码被纯文本转换吞掉；
+- **同音字/形近字错漏**："轫致辐射"→"韧致辐射"、"ν"→"v"、"N₀"→"No"；
+- **模型推理泄漏**：多模态 OCR 模型的 "The Ground Truth image displays..." 等提示词进入正文；
+- **重复图片堆积**：同一幅原理图在多张幻灯片被重复截取数十次。
 
-这个 skill 覆盖了从 OCR 到交付的完整流程，每条规则都来自实际踩过的坑。
+本 Skill 提供标准工业流水线与严格质量门禁（KaTeX 全量 100% 编译通过），每条规则均来自 500+ 页真实经典教材的实战踩坑。
 
 ## 包含什么
 
 ```
-SKILL.md                        流程、输出标准、常见问题
+SKILL.md                        技能定义、执行准则与反模式清单
 references/
-  mineru-api.md                 MinerU API 契约、结果结构、连接问题处理
-  math-normalization.md         公式归一化 8 条规则，附真实前后对照
+  mineru-api.md                 MinerU API 契约、归一化坐标与 DoH 连接策略
+  math-normalization.md         12 条科学公式归一化规则，附真实前后对照
+  book-workflow.md              超长教材与学术专著分片识别、重组指引
 scripts/
-  mineru_ocr.py                 OCR 提交/轮询/下载（含失败回退）
-  build_markdown.py             从 OCR 结果装配 Markdown（核心脚本）
-  normalize_math.py             公式归一化（可作库调用，也可命令行）
-  extract_formulas.py           从 Markdown 抽取公式
-  validate_output.py            交付前结构校验
-  validate_math.cjs             KaTeX 全量公式编译校验
-  preview_server.py             本地 Markdown + KaTeX 预览
-  _selftest.py                  归一化规则自测
+  mineru_ocr.py                 大文档切分 (split) / 批量提交 / 轮询 / 容错下载
+  build_markdown.py             Markdown 组装核心（支持 slides 课件与 book 教材双模式）
+  normalize_math.py             LaTeX 公式归一化引擎（命令分离、式号修复、括号配平）
+  extract_formulas.py           从 Markdown 抽取全部公式
+  validate_output.py            交付前结构校验与模型提示词泄漏检测
+  validate_math.cjs             KaTeX 全量公式编译严格校验（100% 门禁）
+  preview_server.py             本地离线 Markdown + KaTeX 预览沙箱
+  _selftest.py                  公式归一化与边缘用例自动化测试
 examples/
-  RESULTS.md                    真实课件处理的效果对照（含图片）
+  RESULTS.md                    实战案例报告（694页材料课件 + 556页物理化学经典教材）
 ```
 
 ## 核心流程
 
-1. **先判断，再动手** —— 源文件已有原生文字和内嵌原图时，可能根本不需要 OCR，直接提取更准更清晰。
-2. **OCR** —— 用 MinerU 一次拿到文字、LaTeX 公式、表格、插图坐标。
-3. **用源文件校正文字** —— 按文本框坐标 + 相似度与 OCR 配对，源文件文字是"真值"。
-4. **提取图片** —— 优先取内嵌原图（原始分辨率），按内容哈希去重，剔除落在图片区域内的重复标签文字。
-5. **归一化公式** —— 中文进 `\text{}`、展平嵌套、全角标点换半角、拆回被粘连的正文、修复跨界括号。
-6. **组织正文** —— 按知识结构合并，同名小节不重复生成标题，标题层级不跳跃。
-7. **全量校验** —— KaTeX 逐个编译全部公式（要求 100% 通过），再浏览器实际渲染验证。
+1. **先判断，再动手** —— 检查原生文字与内嵌原图，确定是幻灯片 (`--mode slides`) 还是长篇教材 (`--mode book`)。
+2. **切片与 OCR** —— 超长文档调用 `mineru_ocr.py split` 自动按页切块并批量提交，单文档直接提交。
+3. **文字交叉校对** —— 源文件有文字层时（PPTX/DOCX），以原生文字为基准自动纠正 OCR 错字。
+4. **图表高清提取** —— 源文件内嵌原图优先，扫描件从 PDF 2.5–3× 裁切，哈希去重，提取表格单元格内嵌二维码。
+5. **科学公式归一化** —— 命令粘连分离、化学下标隔离、双重式号去重、跨界括号修复，二维环状结构原图保真。
+6. **结构组织与重组** —— 教材模式保持自然图文混排，自动平滑续接跨页段落，按章节定义生成统一知识库。
+7. **全量编译与渲染验证** —— KaTeX 逐一编译全部公式（要求 100% 通过），本地预览沙箱确认无错。
 
-## 安装
+## 真实实战规模
 
-### 作为 Agent Skill
+| 案例 | 类型与规模 | 公式数量 | 图片/图表 | 质量指标 |
+| :--- | :--- | :--- | :--- | :--- |
+| **案例一：材料分析测试方法** | 10 章 694 页 PPT 课件 | 2,118 个 | 199 张 | 公式 100% 通过，纠错 7 处 |
+| **案例二：物理化学（第六版）下册** | 556 页全扫描经典高校教材 | **7,523 个** | 332 张 (含28个二维码) | **KaTeX 7,523/7,523 全部通过（0 失败）**，0 坏链 |
 
-把整个目录放到技能目录下：
+*详见 [examples/RESULTS.md](examples/RESULTS.md)。*
 
-```bash
-# 用户级（所有项目可用）
-git clone https://github.com/<your-name>/doc-ocr-to-markdown ~/.agents/skills/doc-ocr-to-markdown
-```
-
-支持的路径（按优先级）：`<项目>/.zcode/skills/`、`<项目>/.agents/skills/`、`~/.zcode/skills/`、`~/.agents/skills/`。
-
-### 依赖
+## 安装与依赖
 
 ```bash
+# 克隆至技能目录（以用户级为例）
+git clone https://github.com/luffysolution-svg/doc-ocr-to-markdown ~/.agents/skills/doc-ocr-to-markdown
+
+# Python 依赖
 pip install requests pymupdf pillow python-pptx markdown markdown-it-py beautifulsoup4
-npm install katex          # 仅公式校验与预览需要
+
+# Node.js 依赖（用于 KaTeX 100% 公式全量编译与本地预览）
+npm install katex
 ```
 
-`python-pptx` 只在源文件是 PPTX 时需要。MinerU OCR 需要 `MINERU_API_TOKEN` 环境变量（见 [mineru.net](https://mineru.net)）。
+环境变量：MinerU 云端识别需要设置 `MINERU_API_TOKEN`（获取方式见 [mineru.net](https://mineru.net)）。
 
-## 使用
-
-安装后，直接提需求即可触发：
-
-> 把 `./课件/` 里的 PDF 整理成 Markdown 知识库，带公式和图片
-
-也可以单独调用脚本：
+## 常用命令
 
 ```bash
-# OCR（需要 MINERU_API_TOKEN）
-python scripts/mineru_ocr.py submit --out-root ./ocr-out *.pdf
+# 1. 超长教材智能切片（如 556 页 PDF 拆为 96 页切片）
+python scripts/mineru_ocr.py split path/to/textbook.pdf --out-root ./ocr-work --chunk-size 96
 
-# 装配成 Markdown（可带源文件校错与内嵌原图）
-python scripts/build_markdown.py --raw ./ocr-out/raw --out ./知识库 \
-    --source-dir ./课件 --source-glob '*.pptx' --pdf-dir ./课件PDF
+# 2. 批量提交 MinerU 云端 API
+python scripts/mineru_ocr.py submit --out-root ./ocr-work --id-file ./ocr-work/ids.tsv
 
-# 公式归一化
-python scripts/normalize_math.py fix notes.md > notes-fixed.md
-python scripts/normalize_math.py check notes.md          # 只检查
+# 3. 教材模式组装（自然图文流混排、表内二维码提取、双轨扫描图备查）
+python scripts/build_markdown.py \
+    --raw ./ocr-work/raw \
+    --out ./知识库 \
+    --mode book \
+    --manifest ./ocr-work/manifest.json \
+    --chapters ./chapters.json \
+    --pdf path/to/textbook.pdf \
+    --keep-table-images
 
-# 交付前校验
+# 4. 课件模式组装（PPTX 原生文字校对与原图提取）
+python scripts/build_markdown.py --raw ./ocr-work/raw --out ./知识库 \
+    --mode slides --source-dir ./课件 --pdf-dir ./课件PDF
+
+# 5. 交付前结构与链接校验
 python scripts/validate_output.py ./知识库 --images-dir images
 
-# 公式全量编译校验
+# 6. KaTeX 100% 全量公式编译门禁（0 容错）
 python scripts/extract_formulas.py ./知识库 --out formulas.json
 node scripts/validate_math.cjs formulas.json
 
-# 本地预览
-python scripts/preview_server.py ./知识库
+# 7. 本地离线预览验证沙箱
+python scripts/preview_server.py ./知识库 --port 8766
 ```
 
-## 一个具体的坑
+## 输出规范
 
-MinerU 返回的 `bbox` 是 **0–1000 归一化坐标**，不是像素也不是 PDF point。拿它裁图或与源文件对象做位置比对前必须换算——这个坑不踩一次很难想到。
-
-另一个：结果 zip 托管在 `cdn-mineru.openxlab.org.cn`，如果本机 DNS 被代理的 fake-IP 接管，这个域名会解析到保留地址，表现为 TLS 握手 EOF（而 `mineru.net` 本身正常，所以容易误判为网络没问题）。`mineru_ocr.py` 里用公共 DoH 取真实 IP 再指定连接目标，保留 TLS 校验。
-
-## 输出标准
-
-这个 skill 产出的知识库是"干净"的：
-
-- 正文连续，没有页码、"来源"标注、知识导读、折叠原图块等编辑痕迹
-- 图片用标准 `![](相对路径)` 直接预览，不用 HTML
-- 相对路径，整个目录可复制可移动
-- 公式用 Obsidian 兼容语法，同时通用 Markdown 渲染器也能处理
-
-## 适用范围与限制
-
-**适用**：含公式和图表的课件、教材、讲义、论文、扫描件；批量文档转知识库；为 RAG 或 Agent 检索准备结构化内容。
-
-**限制**：图片内的文字不做 OCR 重建（保留原图）；纯扫描件没有源文字可校正，文字准确性完全依赖 OCR；表格识别质量取决于原文档版式复杂度。公式归一化规则针对 KaTeX/MathJax 语法，不覆盖所有 LaTeX 宏包。
+产出的知识库完全为人类长效阅读与智能体（RAG/Agent）索引设计：
+- **纯净连续**：剔除页眉页脚、页码、模型推理泄漏、折叠块与多余编辑痕迹；
+- **全相对路径**：图片采用 `![](images/chXX/...)` 标准格式，知识库目录整体可移植；
+- **双模态保真**：公式输出标准 LaTeX，复杂科学表格与复杂化学环状键保留原扫描图裁片双轨备查；
+- **入口导航**：根目录附带包含各章各节锚点的 `00-目录.md`。
 
 ## License
 
 MIT
+

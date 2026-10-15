@@ -222,8 +222,9 @@ def captions_of(items: list[dict]) -> list[str]:
     return result
 
 
-def table_markdown(html: str) -> str:
-    """MinerU 的 table_body 是 HTML，转成 Markdown 表格。"""
+def table_markdown(html: str, store: FigureStore | None = None, ocr_dir: Path | None = None,
+                   image_dir_name: str = '') -> str:
+    """MinerU 的 table_body 是 HTML，转成 Markdown 表格，并安全提取嵌入在单元格内的图片（如二维码、图标）。"""
     try:
         from bs4 import BeautifulSoup
     except ImportError:
@@ -232,6 +233,20 @@ def table_markdown(html: str) -> str:
     table = soup.find('table')
     if not table:
         return ''
+
+    # 提取并替换单元格中的 <img> 为标准 Markdown 图片引用
+    if store is not None and ocr_dir is not None and image_dir_name:
+        for img in table.find_all('img'):
+            src = img.get('src') or ''
+            src_path = (ocr_dir / src.replace('\\', '/')).resolve()
+            if src_path.is_file():
+                saved_name = store.store(src_path.read_bytes(), src_path.suffix.lstrip('.'))
+                if saved_name:
+                    alt = img.get('alt', '表内图')
+                    img.replace_with(f'![{alt}](images/{image_dir_name}/{saved_name})')
+            else:
+                img.replace_with('')
+
     grid, spans = [], {}
     for ri, tr in enumerate(table.find_all('tr')):
         row = {c: v for (r, c), v in spans.items() if r == ri}
@@ -285,7 +300,8 @@ def match_source(folder_name: str, sources: dict[str, Path], ordinal: int) -> Pa
 
 def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: Path | None,
                   image_dir: Path, title: str, review: list,
-                  ocr_dir: Path | None = None) -> tuple[str, dict]:
+                  ocr_dir: Path | None = None, mode: str = 'slides',
+                  page_offset: int = 0, keep_table_images: bool = False) -> tuple[str, dict]:
     store = FigureStore(image_dir)
     content = [f'# {title}']
     headings: set[str] = set()
@@ -320,6 +336,7 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
 
     for pi in sorted(by_page):
         page_items = by_page[pi]
+        actual_pi = pi + page_offset
         source = source_pages[pi] if source_pages and pi < len(source_pages) else None
         used_text: set[int] = set()
         used_pic: set[int] = set()
@@ -355,8 +372,8 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                     used_pic.add(match[1])
                     name = store.store(match[2]['blob'], match[2]['ext'])
                     stats['native_figures'] += 1
-                elif pdf is not None and pi < len(pdf):
-                    blob = store.crop(pdf[pi], box)
+                elif pdf is not None and actual_pi < len(pdf):
+                    blob = store.crop(pdf[actual_pi], box)
                     if blob:
                         name = store.store(blob, 'png')
                         stats['cropped_figures'] += 1
@@ -374,11 +391,12 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                 caps = captions_of(group)
                 alt = plain_text(caps[0]) if caps else title
                 alt = re.sub(r'[\[\]\n|]', ' ', alt).strip()
-                # 图片块插在所在位置
-                figure_blocks.append(f'![{alt}](images/{image_dir.name}/{name})')
+                fig_markup = f'![{alt}](images/{image_dir.name}/{name})'
+                target_container = emit if mode == 'book' else figure_blocks
+                target_container.append(fig_markup)
                 for cap in caps:
                     if nkey(cap) not in headings:
-                        figure_blocks.append(cap)
+                        target_container.append(cap)
                 stats['figures'] += 1
                 continue
 
@@ -388,15 +406,25 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                 text = re.sub(r'[ \t]+', ' ', raw).strip()
                 if not text or text in SKIP_TEXT or LABEL_ONLY.match(text):
                     continue
+                # 过滤 MinerU 模型推理说明泄漏
+                if re.search(r'The Ground Truth|According to Rule|provided OCR content|OCR result must', text):
+                    continue
                 # 画在图片上的标签：图片文件里已包含，不重复成正文
                 if picture_regions and len(text) <= 12:
                     item_box = box_of(item)
-                    # 逐个区域判断（不能用并集，并集可能覆盖整页）
                     if any(overlap(item_box, region) > 0.6 for region in picture_regions):
                         stats['embedded_labels'] += 1
                         continue
 
-                is_heading = bool(item.get('text_level')) or (box_of(item)[1] < 0.152 and len(text) < 100 and '$' not in text)
+                # 标题判断逻辑：book 模式遵循严格章节与节号规则，避免页顶正文误升标题
+                if mode == 'book':
+                    is_chapter_title = bool(re.match(r'^第[一二三四五六七八九十百\d]+章', text))
+                    sec_match = re.match(r'^([*＊§]?\s*\d+(?:\.\d+)+)', text)
+                    is_special_heading = text in ('本章基本要求', '拓展学习资源', '复习题', '习题', '附录')
+                    is_heading = bool(item.get('text_level')) or (sec_match and len(text) < 65) or is_chapter_title or is_special_heading
+                else:
+                    is_heading = bool(item.get('text_level')) or (box_of(item)[1] < 0.152 and len(text) < 100 and '$' not in text)
+
                 if is_heading:
                     if nkey(text) == nkey(title):
                         continue
@@ -408,6 +436,8 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                     m = re.match(r'^(\d+(?:\.\d+)*)', text)
                     if m:
                         level = min(5, len(m.group(1).split('.')))
+                    elif re.match(r'^第[一二三四五六七八九十百\d]+章', text):
+                        level = 2
                     disp = plain_text(text) if ('\\' in text or '$' in text) else text
                     emit.append('#' * level + ' ' + disp)
                     headings.add(identity)
@@ -435,6 +465,14 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                             stats['text_review'] += 1
 
                 if nkey(text) != last_heading:
+                    # book 模式跨页段落连贯拼接
+                    if mode == 'book' and emit and pi > sorted(by_page)[0] and not emit[-1].startswith('#') and not emit[-1].startswith('!['):
+                        prev = emit[-1]
+                        if not re.search(r'[。！？；：.!?;:]\s*$', prev) and not re.match(r'^(?:[（(]?\d+[）).、]|[一二三四五六七八九十]+[、.])', text):
+                            sep = ' ' if re.search(r'[A-Za-z0-9]$', prev) and re.match(r'^[A-Za-z0-9]', text) else ''
+                            emit[-1] += sep + text
+                            stats['joined_page_paragraphs'] += 1
+                            continue
                     emit.append(text)
                     stats['paragraphs'] += 1
                 continue
@@ -461,10 +499,18 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
             if kind == 'table':
                 for cap in captions_of([item]):
                     emit.append(cap)
-                md = table_markdown(item.get('table_body', ''))
+                md = table_markdown(item.get('table_body', ''), store=store, ocr_dir=ocr_dir,
+                                    image_dir_name=image_dir.name)
                 if md:
                     emit.append(md)
                     stats['tables'] += 1
+                if keep_table_images and pdf is not None and actual_pi < len(pdf):
+                    blob = store.crop(pdf[actual_pi], box_of(item))
+                    if blob:
+                        t_name = store.store(blob, 'png')
+                        if t_name:
+                            emit.append(f'![数据表原图](images/{image_dir.name}/{t_name})')
+                            stats['table_images'] += 1
                 for note in (item.get('table_footnote') or []):
                     if isinstance(note, str) and note.strip():
                         emit.append(note.strip())
@@ -486,7 +532,8 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                 if text and not LABEL_ONLY.match(text):
                     emit.append(text)
 
-        content.extend(figure_blocks)
+        if mode == 'slides':
+            content.extend(figure_blocks)
         content.extend(emit)
 
     if pdf:
@@ -502,19 +549,79 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='把 OCR 结果装配成 Markdown 知识库')
     parser.add_argument('--raw', required=True, help='OCR 结果目录（含各文件的 content_list.json）')
     parser.add_argument('--out', required=True, help='输出目录')
+    parser.add_argument('--mode', choices=['slides', 'book'], default='slides',
+                        help='排版模式：slides 为课件幻灯片（图片置顶、原生PPT纠错），book 为教材/长文档（自然图文流混排、严格章节层级、跨页段落合并）')
+    parser.add_argument('--clean', action='store_true', help='执行前清空输出目录（默认不清空，安全增量覆写）')
+    parser.add_argument('--manifest', help='分片清单 JSON 路径（支持多批块大文档组装与全局页码偏移计算）')
+    parser.add_argument('--chapters', help='章节划分 JSON 路径（按起止页重组为规范教材章节）')
+    parser.add_argument('--pdf', help='整本原 PDF 文件路径（用于高清裁切原图与数据表原图）')
+    parser.add_argument('--pdf-dir', help='PDF 目录（源文件里没有的图从这里裁切）')
+    parser.add_argument('--keep-table-images', action='store_true', help='为复杂数据表额外保留原扫描图高清裁片，实现文字检索与原版验算双轨保真')
     parser.add_argument('--source-dir', help='源文件目录（用于文字校正与内嵌原图，如 PPTX）')
     parser.add_argument('--source-glob', default='*.pptx')
-    parser.add_argument('--pdf-dir', help='PDF 目录（源文件里没有的图从这里裁切）')
     parser.add_argument('--only', nargs='*', help='只处理这些子目录（data_id）')
     parser.add_argument('--titles', help='JSON 文件：{"data_id": "章节标题"}')
     args = parser.parse_args()
 
     raw_root = Path(args.raw).resolve()
     out_root = Path(args.out).resolve()
-    if out_root.exists():
+    if args.clean and out_root.exists():
         shutil.rmtree(out_root)
-    (out_root / 'images').mkdir(parents=True)
+    (out_root / 'images').mkdir(parents=True, exist_ok=True)
 
+    # ------------------------------------------------ 分片多批块教材装配流
+    if args.manifest and args.chapters:
+        manifest = json.loads(Path(args.manifest).read_text(encoding='utf-8'))
+        sections = json.loads(Path(args.chapters).read_text(encoding='utf-8'))
+        pdf_path = Path(args.pdf).resolve() if args.pdf else None
+        if not pdf_path and manifest.get('source'):
+            pdf_path = Path(manifest['source']).resolve()
+
+        blocks = []
+        for part in manifest['parts']:
+            folder = raw_root / part['id']
+            lists = list(folder.glob('*_content_list.json'))
+            if not lists:
+                continue
+            for item in json.loads(lists[0].read_text(encoding='utf-8')):
+                item = dict(item)
+                item['_page'] = item.get('page_idx', 0) + part.get('start_page', 1)
+                item['_folder'] = str(folder)
+                blocks.append(item)
+
+        report = []
+        for sec in sections:
+            start, end = sec['start'], sec['end']
+            title = sec['title']
+            filename = sec.get('file', f"{sec['id']}.md")
+            selected = [b for b in blocks if start <= b['_page'] <= end]
+            image_dir = out_root / 'images' / sec['id']
+            image_dir.mkdir(parents=True, exist_ok=True)
+            # 建立连续页索引供 build_chapter 处理
+            remapped = []
+            for b in selected:
+                remapped.append({**b, 'page_idx': b['_page'] - start})
+            review = []
+            text, stats = build_chapter(
+                remapped, None, pdf_path, image_dir, title, review,
+                ocr_dir=raw_root, mode='book', page_offset=start - 1,
+                keep_table_images=args.keep_table_images
+            )
+            (out_root / filename).write_text(text, encoding='utf-8')
+            report.append({'id': sec['id'], 'file': filename, 'title': title, **stats})
+            print(f'{filename}: {stats}', flush=True)
+
+        lines = ['# 目录', '']
+        for entry in report:
+            lines.append(f'- [{entry["title"]}]({entry["file"]})')
+        (out_root / '00-目录.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        (out_root / 'build-report.json').write_text(
+            json.dumps({'chapters': report, 'mode': 'book'}, ensure_ascii=False, indent=2),
+            encoding='utf-8')
+        print(f'\n教材模式装配完成，共 {len(report)} 章节。')
+        return
+
+    # ------------------------------------------------ 单文档 / 课件常规装配流
     titles = json.loads(Path(args.titles).read_text(encoding='utf-8')) if args.titles else {}
     sources = {}
     if args.source_dir:
@@ -548,13 +655,14 @@ def main() -> None:
             source_name = source_path.name
 
         pdf_path = None
-        if args.pdf_dir:
+        if args.pdf:
+            pdf_path = Path(args.pdf).resolve()
+        elif args.pdf_dir:
             for candidate in Path(args.pdf_dir).glob('*.pdf'):
                 if (source_name and candidate.stem == source_name) or folder.name in candidate.stem:
                     pdf_path = candidate
                     break
             if pdf_path is None:
-                # 再按首个数字配对
                 number = leading_number(folder.name)
                 for candidate in Path(args.pdf_dir).glob('*.pdf'):
                     if number is not None and leading_number(candidate.stem) == number:
@@ -562,9 +670,10 @@ def main() -> None:
                         break
 
         review: list = []
-        text, stats = build_chapter(items, source_pages, pdf_path, image_dir, title, review,
-                                    ocr_dir=folder)
-        # 文件名：标题与 id 重复时只用 id，否则用 "id-标题"
+        text, stats = build_chapter(
+            items, source_pages, pdf_path, image_dir, title, review,
+            ocr_dir=folder, mode=args.mode, keep_table_images=args.keep_table_images
+        )
         if nkey(title) == nkey(folder.name) or title == folder.name:
             filename = f'{folder.name}.md'
         else:
@@ -581,14 +690,14 @@ def main() -> None:
         (out_root / '00-目录.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
     (out_root / 'build-report.json').write_text(
-        json.dumps({'chapters': report, 'review': review_all}, ensure_ascii=False, indent=2),
+        json.dumps({'chapters': report, 'review': review_all, 'mode': args.mode}, ensure_ascii=False, indent=2),
         encoding='utf-8')
     total = {k: sum(r.get(k, 0) for r in report) for k in
              ('paragraphs', 'headings', 'equations', 'tables', 'figures',
               'text_corrected', 'text_review')}
     print()
     print('合计：', json.dumps(total, ensure_ascii=False))
-    if total['text_review']:
+    if total.get('text_review'):
         print(f'有 {total["text_review"]} 处文字差异待人工确认，见 build-report.json 的 review 字段')
 
 

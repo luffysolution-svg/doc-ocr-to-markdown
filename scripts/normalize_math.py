@@ -32,6 +32,71 @@ GREEK = {
 MISC = {r'\circ': '°', r'\times': '×', r'\cdot': '·', r'\pm': '±', r'\approx': '≈',
         r'\geq': '≥', r'\leq': '≤', r'\infty': '∞', r'\sim': '∼', r'\rightarrow': '→'}
 
+STUCK_COMMANDS = re.compile(
+    r'\\(vert|cdot|times|pm|approx|sim|leq|geq|ne|neq|in|subset|cap|cup|'
+    r'forall|exists|partial|nabla|int|sum|prod|rightarrow|leftarrow|'
+    r'longrightarrow|longleftarrow|leftrightarrow)([a-zA-Z])'
+)
+
+
+def _fix_stuck_commands(text: str) -> str:
+    """修复反斜杠命令与紧随的拉丁字母粘连（如 \\vertHg → \\vert Hg, \\cdotkg → \\cdot kg）。"""
+    return STUCK_COMMANDS.sub(r'\\\1 \2', text)
+
+
+def _fix_text_subscripts(text: str) -> str:
+    """修复 \\text{...} 内部出现未闭合下标 _ 或 ^ 导致的 KaTeX 语法错误（多见于化学式与材料名）。"""
+    def replace_text(match):
+        content = match.group(1)
+        if '_' not in content and '^' not in content:
+            return match.group(0)
+        # 纯公式/化学式（无中文），转为 \\mathrm
+        if not re.search(rf'[{CJK}]', content):
+            return r'\mathrm{' + content + '}'
+        # 含中文与化学式混排，如 MnO_2/石墨
+        parts = re.split(rf'([{CJK}]+)', content)
+        built = []
+        for p in parts:
+            if not p:
+                continue
+            if re.search(rf'[{CJK}]', p):
+                built.append(r'\text{' + p + '}')
+            else:
+                built.append(r'\mathrm{' + p + '}')
+        return ''.join(built)
+
+    return re.sub(r'\\text\s*\{([^{}]*)\}', replace_text, text)
+
+
+def _dedup_tags(text: str) -> str:
+    """清理公式中重复的多重 \\tag（如 \\tag{7}\\tag{12.26} 或 \\tag{13.}\\tag{13.49}）。"""
+    tag_matches = list(re.finditer(r'\\tag\*?\s*\{[^{}]*\}', text))
+    if len(tag_matches) <= 1:
+        return text
+    # 提取所有 tag，优先选择包含章节小数点（如 12.26、13.49）的正式编号
+    tags = [m.group(0) for m in tag_matches]
+    best_tag = tags[-1]
+    for t in reversed(tags):
+        # 寻找形如 \\tag{XX.YY} 的完整编号，过滤未闭合的 \\tag{13.}
+        inner = re.sub(r'^\\tag\*?\s*\{|\}$', '', t).strip()
+        if re.search(r'\d+\.\d+', inner) and not inner.endswith('.'):
+            best_tag = t
+            break
+    # 保留正文，去除多余 tag
+    start_first = tag_matches[0].start()
+    end_last = tag_matches[-1].end()
+    return text[:start_first].rstrip() + ' ' + best_tag + text[end_last:]
+
+
+def _fix_arrows_and_tags(text: str) -> str:
+    """修复缺失大括号的 \\xrightarrow 以及损坏的式号脚注格式。"""
+    # 修复 \\xrightarrow[x]y} 缺少左大括号
+    text = re.sub(r'\\xrightarrow\s*\[([^{}\]]*)\]([a-zA-Z0-9_\-]+)\}', r'\\xrightarrow[\1]{\2}', text)
+    # 修复 \\tag{12.45) $ ^{①} \} 等式号带脚注损坏的情况
+    text = re.sub(r'\\tag\s*\{\s*(\d+(?:\.\d+)?)\)\s*\$?\s*\^?\{?([①②③④⑤⑥⑦⑧⑨⑩])\}?\s*\\?\}',
+                  r'\\tag*{(\1)$^{\\text{\2}}$}', text)
+    return text
+
 
 def _collapse_text(text: str) -> str:
     """展平嵌套的 \\text{\\text{...}} → \\text{...}。"""
@@ -81,6 +146,12 @@ def normalize_math(text: str) -> str:
     """归一化一段公式内容（不含 $ 定界符）。"""
     text = text.replace('\\[', '$$').replace('\\]', '$$')
     text = text.replace('\\(', '$').replace('\\)', '$')
+    # 修复命令与紧随字母粘连（如 \\vertHg → \\vert Hg, \\cdotkg → \\cdot kg）
+    text = _fix_stuck_commands(text)
+    # 修复缺失大括号的扩展箭头与式号脚注格式
+    text = _fix_arrows_and_tags(text)
+    # 清理多重重复 \\tag
+    text = _dedup_tags(text)
     # 旧式简写：{\rm xxx} / {\it xxx} → {\mathrm{xxx}} / {\mathit{xxx}}
     text = re.sub(r'\{\s*\\(rm|it)\s+([^{}]*?)\s*\}',
                   lambda m: '{\\' + ('mathrm' if m.group(1) == 'rm' else 'mathit') + '{' + m.group(2) + '}}',
@@ -90,6 +161,8 @@ def normalize_math(text: str) -> str:
     # 全角标点在数学模式里不被识别，必须换半角
     text = (text.replace('（', '(').replace('）', ')')
                 .replace('，', ',').replace('；', ';').replace('：', ':'))
+    # 修复 \\text{...} 里的化学下标
+    text = _fix_text_subscripts(text)
     return _collapse_text(_wrap_cjk(text))
 
 
@@ -106,6 +179,7 @@ def fix_inline_parens(text: str) -> str:
         opener = prose.rstrip().endswith(('（', '('))
         closer = prose.rstrip().endswith(('）', ')'))
 
+        # 情况 1：正文有开括号，公式末尾有多余的闭括号
         if content.count(')') - content.count('(') == 1 and opener:
             balance, cut = 0, None
             for position, character in enumerate(content):
@@ -123,6 +197,7 @@ def fix_inline_parens(text: str) -> str:
                 pieces.append(bracket + content[cut + 1:])
                 cursor = span.end()
                 continue
+        # 情况 2：正文以闭括号结束，公式开头有多余的开括号
         elif content.count('(') - content.count(')') == 1 and closer:
             balance, cut = 0, None
             for position in range(len(content) - 1, -1, -1):
@@ -141,6 +216,22 @@ def fix_inline_parens(text: str) -> str:
                 pieces.append('$' + content[cut + 1:].strip() + '$')
                 cursor = span.end()
                 continue
+        # 情况 3：公式开头吃进了开括号，如 $(\\mathrm{H}_2$
+        elif (content.startswith('(') or content.startswith('（')) and content.count('(') - content.count(')') == 1:
+            bracket = '（' if content.startswith('（') else '('
+            inner = content[1:].strip()
+            pieces.append(prose)
+            pieces.append(bracket)
+            pieces.append('$' + inner + '$')
+            cursor = span.end()
+            continue
+        # 情况 4：公式结尾吃进了方括号，如 $...]$ 且内部方括号不平
+        elif content.endswith(']') and content.count(']') - content.count('[') == 1:
+            pieces.append(prose)
+            pieces.append('$' + content[:-1].rstrip() + '$')
+            pieces.append(']')
+            cursor = span.end()
+            continue
 
         pieces.append(prose)
         pieces.append(math)

@@ -31,6 +31,21 @@ cases = [
     ('图注纯文本',
      r'图4-1 $\theta$ -sin $\theta$ 关系曲线',
      'θ'),
+    ('粘连命令 vert',
+     r'\frac{\varphi_{\text{Cl}^-\vertHg_2Cl_2}(298)}{\text{V}}',
+     r'\vert Hg'),
+    ('粘连命令 cdot',
+     r'\mathrm{CuSO_4(1mol\cdotkg^{-1})}',
+     r'\cdot kg'),
+    ('化学下标移出 text',
+     r'\text{NH_4Cl/ZnCl_2/石墨}',
+     r'\mathrm{NH_4Cl/ZnCl_2/}\text{石墨}'),
+    ('重复 tag 去重',
+     r'E = mc^2 \tag{7}\tag{12.26}',
+     r'\tag{12.26}'),
+    ('损坏 tag 脚注修复',
+     r'K_c = 1 \tag{12.45) $ ^{①} \}',
+     r'\tag*{(12.45)$^{\text{①}}$}'),
 ]
 failures = []
 for name, source, expected in cases:
@@ -55,6 +70,18 @@ if fixed.count('(') != fixed.count(')'):
 
 source2 = r'如果入射角与反射角相等，则 $\delta = a$ （ $\cos \theta - \cos \theta$） = 0 。'
 print('已正确:', fix_inline_parens(source2) == source2)
+
+source3 = r'直链反应 $(\mathrm{H}_2$ 和 $\mathrm{Cl}_2$ 反应的历程）'
+fixed3 = fix_inline_parens(source3)
+print('公式开头括号移出:', fixed3)
+if fixed3 != r'直链反应 ($\mathrm{H}_2$ 和 $\mathrm{Cl}_2$ 反应的历程）':
+    failures.append(('公式开头括号移出', source3, '修复', fixed3, ''))
+
+source4 = r'如果 n = \infty，则可得到式 [因为 $(p / p_s)^{\infty} \rightarrow 0]$ 成立'
+fixed4 = fix_inline_parens(source4)
+print('公式末尾方括号移出:', fixed4)
+if '$] 成立' not in fixed4:
+    failures.append(('公式末尾方括号移出', source4, '修复', fixed4, ''))
 
 # 粘连正文
 tex = r'\text {和像差（主要是球差} \varDelta r _ {s} = \frac {1}{4} C _ {s} \alpha^ {3}) 。'

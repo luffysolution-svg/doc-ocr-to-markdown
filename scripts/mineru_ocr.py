@@ -224,6 +224,51 @@ def status(args) -> None:
         print(f'{result.get("data_id")}: {result.get("state")}{suffix}')
 
 
+def split_pdf(args) -> None:
+    try:
+        import fitz
+    except ImportError:
+        sys.exit('拆分超长 PDF 需要安装 PyMuPDF: pip install pymupdf')
+    src = Path(args.file).resolve()
+    if not src.is_file():
+        sys.exit(f'文件不存在: {src}')
+    out_root = Path(args.out_root).resolve()
+    chunks_dir = out_root / 'chunks'
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+
+    doc = fitz.open(src)
+    total_pages = len(doc)
+    chunk_size = args.chunk_size
+    manifest = []
+    ids = []
+    prefix = args.prefix or 'part'
+
+    for index, start in enumerate(range(0, total_pages, chunk_size), 1):
+        end = min(start + chunk_size, total_pages)
+        key = f'{prefix}{index:02d}'
+        target = chunks_dir / f'{key}.pdf'
+        part = fitz.open()
+        part.insert_pdf(doc, from_page=start, to_page=end - 1)
+        part.save(target, garbage=3, deflate=True)
+        part.close()
+        manifest.append({
+            'id': key,
+            'start_page': start + 1,
+            'end_page': end,
+            'pages': end - start,
+            'path': str(target),
+        })
+        ids.append(f'{target}\t{key}')
+
+    (out_root / 'manifest.json').write_text(
+        json.dumps({'source': str(src), 'pages': total_pages, 'chunk_size': chunk_size, 'parts': manifest},
+                   ensure_ascii=False, indent=2), encoding='utf-8')
+    (out_root / 'ids.tsv').write_text('\n'.join(ids), encoding='utf-8')
+    print(f'已将 {src.name}（共 {total_pages} 页）拆分为 {len(manifest)} 个分片，保存在 {chunks_dir}')
+    print(f'已生成清单：{out_root / "manifest.json"} 与 {out_root / "ids.tsv"}')
+    print(f'接下来可直接运行：python mineru_ocr.py submit --out-root {out_root} --id-file {out_root / "ids.tsv"}')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description='MinerU 云端 OCR')
     sub = parser.add_subparsers(dest='command', required=True)
@@ -233,6 +278,13 @@ def main() -> None:
         p.add_argument('--interval', type=int, default=15, help='轮询间隔秒')
         p.add_argument('--timeout', type=int, default=7200, help='总超时秒')
         p.add_argument('--quiet', action='store_true')
+
+    sp = sub.add_parser('split', help='将超长教材/大 PDF 拆分为合规分片并生成 manifest')
+    sp.add_argument('file', help='待拆分的大 PDF 路径')
+    sp.add_argument('--out-root', required=True, help='工作目录（输出 chunks/, manifest.json, ids.tsv）')
+    sp.add_argument('--chunk-size', type=int, default=96, help='单分片最大页数（默认 96 页）')
+    sp.add_argument('--prefix', default='part', help='分片 id 前缀（如 part01）')
+    sp.set_defaults(func=split_pdf)
 
     s = sub.add_parser('submit', help='提交新批次')
     s.add_argument('files', nargs='*', help='待识别文件')
