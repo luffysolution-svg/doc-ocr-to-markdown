@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
+package-lock.json
+
+# OCR 工作目录与中间产物
+.ocr-work/
+.ocr_work/
+ocr-out/
+raw/
+job.json
+status.json
+formulas.json
+math-validation.json
+
+# 临时文件
+*.tmp
+.DS_Store
+Thumbs.db
+
+# 预览产物
+*.log
