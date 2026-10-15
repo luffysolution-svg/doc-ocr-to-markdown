@@ -31,6 +31,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import requests
+from console_output import safe_print as print
 
 BASE = 'https://mineru.net/api/v4'
 DOH = 'https://dns.alidns.com/resolve'

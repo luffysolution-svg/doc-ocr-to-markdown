@@ -10,6 +10,7 @@ import argparse
 from dataclasses import dataclass
 import re
 import sys
+from console_output import safe_print as print
 from pathlib import Path
 
 CJK = r'\u4e00-\u9fff'

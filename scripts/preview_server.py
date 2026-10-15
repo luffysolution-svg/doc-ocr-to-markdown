@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote
 
 import markdown
+from console_output import safe_print as print
 
 from normalize_math import scan_math, math_issues
 CDN = 'https://cdn.jsdelivr.net/npm/katex@0.19.0/dist'

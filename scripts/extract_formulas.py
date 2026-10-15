@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from console_output import safe_print as print
 
 from normalize_math import scan_math, math_issues
 

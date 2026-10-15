@@ -20,6 +20,7 @@ import argparse
 import json
 import re
 import sys
+from console_output import safe_print as print
 from collections import Counter
 from pathlib import Path
 from urllib.parse import unquote, urlsplit

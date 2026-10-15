@@ -31,6 +31,7 @@ import io
 import json
 import re
 import sys
+from console_output import safe_print as print
 import tempfile
 from collections import defaultdict
 from contextlib import ExitStack
