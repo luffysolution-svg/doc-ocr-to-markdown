@@ -1,6 +1,6 @@
 ---
 name: doc-ocr-to-markdown
-description: 将扫描教材、PDF图书、理工科课件、论文和讲义整理为带高清图片、表格与LaTeX公式的Markdown知识库。用于文档OCR、教材分章节转md、提取公式、制作Obsidian笔记，以及排查转换后图片缺失、子图拆散、图题错挂或裁图不全。支持大文档分片、MinerU云端OCR、回源校正、图表保真、公式全量KaTeX编译与浏览器渲染验收。
+description: 将扫描教材、PDF图书、理工科课件、期刊论文和讲义整理为保留图表与LaTeX公式的Markdown知识库。用于文档OCR、教材分章节转md、Zotero文献或独立PDF整理、文献元数据frontmatter、Obsidian笔记，以及修复图片缺失、子图拆散、图题错挂或裁图不全。支持MinerU云端OCR、回源校正、公式全量KaTeX编译与浏览器渲染验收。
 ---
 
 # 文档转 Markdown 知识库 (doc-ocr-to-markdown)
@@ -19,10 +19,11 @@ description: 将扫描教材、PDF图书、理工科课件、论文和讲义整�
    - 若 100% 纯扫描件（字符数为 0），则完全依赖 OCR，需在交付报告中说明。
 2. **源文件有无内嵌原图？**
    - PPTX 优先提取 `shape.image.blob`，PDF 检查 `page.get_images()`。
-   - 内嵌原图分辨率远高于页面截图；只有整页扫描教材才从 PDF 按归一化坐标裁切。
+   - 可独立复原整幅图时优先内嵌原图；多对象矢量图和扫描页按完整区域裁切，不能用单张位图替代整幅图。
 3. **识别文档是“课件幻灯片”还是“长篇教材/专著”？**
    - **幻灯片课件 (`--mode slides`)**：一页一个独立主题，图文视觉集中，优先图置顶与 PPT 原生文字对齐。
    - **长篇教材/论文 (`--mode book`)**：连续行文，必须采用**自然流混排**（严禁将图强制提前）、**严格章节判定**（严禁将页顶首句误升 H2）、**保守保留段落边界**。
+   - **科研文献（期刊 PDF / Zotero）**：先读 `references/research-documents.md`，使用 `scripts/build_research_document.py` 复用装配与门禁，写入作者、原文摘要等 frontmatter；双栏默认保留经核对的 OCR 阅读顺序。原 PDF 独立列出全部图、表、独立公式和末尾章节，逐项回源验收；其他科研类型待真实样本验证。
 4. **安全交付目标路径：**
    - 默认输出到**全新的独立目录**（如 `<源目录>/<书名>-知识库`），严禁破坏覆盖原始文件。
    - 脚本只更新未被人工修改的生成文件，拒绝清空目录。默认只交付导航、正文 Markdown 与图片；构建状态及质检报告留在交付目录之外。
@@ -57,7 +58,7 @@ OCR 会出现形近字、同音字或英文字母误识（如“轫致辐射”�
 
 提取优先级：
 1. **源文件内嵌原生图片**（最清晰）；
-2. **按 OCR 坐标从原 PDF 以 2.5–3 倍缩放高清裁切**（用于扫描件）；
+2. **按完整图表区域从原 PDF 至少 3 倍缩放高清裁切**（扫描件或由多个矢量/位图对象组成的图）；
 3. **表格内嵌图片提取**：遇到包含 `<img src="...">` 的表格（如各章拓展学习二维码），自动转存为图片并替换为 Markdown 相对引用，避免丢失；
 4. **特殊复杂结构保真**：对三角形化学键等无法用标准 LaTeX 表达的二维空间图，以及深层合并的复杂科学实验表，开启 `--keep-table-images` 保留高清原版裁图双轨备查。
 
@@ -155,4 +156,5 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 - `references/mineru-api.md` — MinerU 官方契约、数据结构、归一化坐标与 DoH 连接策略
 - `references/math-normalization.md` — 12 条科学公式归一化规则与真实例子
 - `references/book-workflow.md` — 500+ 页学术专著与教材的切片、全局映射与重组指南
+- `references/research-documents.md` — 期刊 PDF / Zotero 来源、元数据、双栏顺序与图表公式逐项验收
 - `examples/RESULTS.md` — 包含《材料分析测试方法》PPT课件与《物理化学（第六版）下册》556页超长教材全流程实战成果

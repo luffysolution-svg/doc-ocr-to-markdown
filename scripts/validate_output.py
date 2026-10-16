@@ -63,6 +63,8 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
     errors: list[str] = []
     warnings: list[str] = []
     text = path.read_text(encoding='utf-8')
+    from markdown_metadata import mask_frontmatter
+    text = mask_frontmatter(text)
     name = path.name
 
     for pattern, label in LEAK_PATTERNS:

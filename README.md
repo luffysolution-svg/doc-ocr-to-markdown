@@ -2,7 +2,7 @@
 
 把扫描教材、PDF图书、理工科课件、学术论文、讲义等文档整理成带高清图片、表格和可渲染 LaTeX 公式的 Markdown 知识库 —— 一个给 AI 编码助手用的工业级 [Agent Skill](https://docs.anthropic.com/en/docs/claude-code/skills)。
 
-不仅是简单的文本提取，它专注解决高难度理工科学术文档的真正痛点：**公式 100% 还原为可渲染的 KaTeX/LaTeX、插图高清去重、表格内二维码完整保留、OCR 错字双轨纠错、500+ 页超长教材智能分片组装**。
+不仅是简单的文本提取，它专注解决高难度理工科学术文档的真正痛点：**公式全量 KaTeX 编译、图表回源保真、高清去重、表格内二维码保留、OCR 错字校对、500+ 页教材分片组装，以及期刊 PDF / Zotero 元数据 frontmatter**。编译通过不等于内容完整，图表和科学符号仍须逐项核对原文。
 
 ## 解决什么问题
 
@@ -43,7 +43,7 @@ examples/
 1. **先判断，再动手** —— 检查原生文字与内嵌原图，确定是幻灯片 (`--mode slides`) 还是长篇教材 (`--mode book`)。
 2. **切片与 OCR** —— 超长文档调用 `mineru_ocr.py split` 自动按页切块并批量提交，单文档直接提交。
 3. **文字交叉校对** —— 当前脚本支持 PPTX 原生文字按位置和相似度校对；其他格式需单独核对，已有 OCR 文字层不能直接视为真值。
-4. **图表高清提取** —— 源文件内嵌原图优先，扫描件从 PDF 2.5–3× 裁切，哈希去重，提取表格单元格内嵌二维码。
+4. **图表高清提取** —— 完整内嵌原图优先，扫描页和多对象矢量图从 PDF 至少 3× 裁切，哈希去重，提取表格单元格内嵌二维码。
 5. **科学公式归一化** —— 保守处理已知命令与有明确配对的括号；化学结构、式号等歧义回源确认后显式修复，二维结构保留原图。
 6. **结构组织与重组** —— 教材模式保持自然图文混排和段落边界，按章节定义生成统一知识库。
 7. **全量编译与渲染验证** —— KaTeX 逐一编译全部公式（要求 100% 通过），本地预览沙箱确认无错。
@@ -64,7 +64,7 @@ examples/
 git clone https://github.com/luffysolution-svg/doc-ocr-to-markdown ~/.agents/skills/doc-ocr-to-markdown
 
 # Python 依赖
-pip install requests pymupdf pillow python-pptx markdown markdown-it-py beautifulsoup4
+pip install -r requirements.txt
 
 # Node.js 依赖（用于 KaTeX 100% 公式全量编译与本地预览）
 npm install katex
@@ -105,6 +105,17 @@ node scripts/validate_math.cjs formulas.json
 # 7. 本地离线预览验证沙箱
 python scripts/preview_server.py ./知识库 --port 8766
 ```
+
+## 期刊论文与 Zotero
+
+科研文献使用独立入口，复用现有装配、修复和门禁。支持只读 Zotero 本地 API 附件副本、独立 PDF 元数据线索与可选 Crossref 核验；frontmatter 保留完整作者、原文摘要和可靠关联的 Zotero 条目 URI。论文默认保留经核对的 OCR 双栏顺序。详细命令和验收边界见 [科研文档说明](references/research-documents.md)，后续类型见 [完善路线图](ROADMAP.md)。
+
+```bash
+python scripts/build_research_document.py --pdf ./source.pdf --raw ./ocr-work/raw/article \
+    --metadata ./metadata.json --out ./知识库/article --state-dir ./research-state/article
+```
+
+当前期刊流程需将全部图表、独立公式及末尾章节与原 PDF 对账，自动校验通过不会自动宣称完整验收。首轮 6 篇 / 71 页的对象、渲染和局限记录见 [期刊实测报告](examples/RESEARCH-VALIDATION.md)。原 PDF、OCR 结果和个人文献库元数据只保留在本地。
 
 ## 输出规范
 

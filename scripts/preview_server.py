@@ -53,6 +53,8 @@ STATE: dict = {'root': None, 'katex': CDN}
 
 def render_markdown(text: str) -> str:
     """把 Markdown 转 HTML，公式占位后交由 KaTeX 在浏览器端渲染。"""
+    from markdown_metadata import frontmatter_end
+    text = text[frontmatter_end(text):]
     formulas: list[tuple[str, str]] = []
 
     spans, issues = scan_math(text)

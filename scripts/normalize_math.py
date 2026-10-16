@@ -52,9 +52,14 @@ def group_end(text: str, start: int) -> int | None:
 
 
 def _block_ranges(text: str) -> list[tuple[int, int]]:
-    ranges = []
+    from markdown_metadata import frontmatter_end
+    metadata_end = frontmatter_end(text)
+    ranges = [(0, metadata_end)] if metadata_end else []
     offset, fence, begin = 0, None, 0
     for line in text.splitlines(keepends=True):
+        if offset < metadata_end:
+            offset += len(line)
+            continue
         marker = re.match(r' {0,3}(`{3,}|~{3,})(.*)', line)
         if fence:
             if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():

@@ -61,7 +61,7 @@ SKIP_TEXT = {'材料分析测试方法'}
 # 纯序号标签，如图中 "(a)" "(1)" "a."
 LABEL_ONLY = re.compile(r'^[（(]?[a-zA-Z0-9][）)]?[.、]?$')
 # 图片说明匹配
-CAPTION = re.compile(r'^\s*(图|表|Fig|Table)\s*[\d一二三四五六七八九十]')
+CAPTION = re.compile(r'^\s*(?:图|表|(?:Extended\s+Data\s+)?(?:Fig(?:ure)?\.?|Table))\s*[\d一二三四五六七八九十]', re.I)
 
 
 def nkey(text: str) -> str:
@@ -202,7 +202,7 @@ class FigureStore:
             y1 = min(1.0, box[3]) * pdf_page.rect.height
             if x1 <= x0 or y1 <= y0:
                 return None
-            factor = scale / pdf_page.rect.width
+            factor = max(3.0, scale / pdf_page.rect.width)
             pix = pdf_page.get_pixmap(matrix=fitz.Matrix(factor, factor),
                                       clip=fitz.Rect(x0, y0, x1, y1), alpha=False)
             return pix.tobytes('png')
@@ -317,10 +317,11 @@ def figure_numbers(items: list[dict]) -> set[str]:
     """Only explicit caption prefixes identify a figure for merge conflicts."""
     numbers = set()
     for caption in captions_of(items):
-        match = re.match(r'^\s*(?:图\s*|(?:Figure|Fig\.?)\s*)(\d+(?:\s*[-－–—.]\s*\d+)*)',
+        match = re.match(r'^\s*(?:(Extended\s+Data)\s+)?(?:图\s*|(?:Figure|Fig\.?)\s*)(\d+(?:\s*[-－–—.]\s*\d+)*)',
                          normalize('NFKC', caption), re.I)
         if match:
-            numbers.add(re.sub(r'\s+', '', match[1]).translate(str.maketrans('－–—', '---')))
+            number = re.sub(r'\s+', '', match[2]).translate(str.maketrans('－–—', '---'))
+            numbers.add(('extended:' if match[1] else '') + number)
     return numbers
 
 
@@ -492,7 +493,8 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                   image_dir: Path, title: str, review: list,
                   ocr_dir: Path | None = None, mode: str = 'slides',
                   page_offset: int = 0, keep_table_images: bool = False,
-                  page_map: list | None = None, page_count: int | None = None) -> tuple[str, dict]:
+                  page_map: list | None = None, page_count: int | None = None,
+                  reading_order: str = 'geometry') -> tuple[str, dict]:
     store = FigureStore(image_dir)
     stats = defaultdict(int)
     title = re.sub(r'\s+', ' ', title).strip()
@@ -518,23 +520,24 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
                 by_page[pi]
         return _render_pages(by_page, source_pages, pdf, image_dir, title, review,
                              ocr_dir, mode, page_offset, keep_table_images, store, content, stats,
-                             page_map=page_map)
+                             page_map=page_map, reading_order=reading_order)
 
 
 def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
-                  mode, page_offset, keep_table_images, store, content, stats, page_map=None):
+                  mode, page_offset, keep_table_images, store, content, stats, page_map=None,
+                  reading_order='geometry'):
     headings = set()
     last_heading = None
     in_exercises = False
     have_section = False
     previous_level = 1
     code_blocks = set()
-    all_items = [item for pi in sorted(by_page) for item in (_sort_page_items(by_page[pi]) if mode == 'book' else by_page[pi])]
+    all_items = [item for pi in sorted(by_page) for item in (_sort_page_items(by_page[pi]) if mode == 'book' and reading_order == 'geometry' else by_page[pi])]
     title_parts = {id(all_items[i]) for i in chapter_title_parts(all_items, title)} if mode == 'book' else set()
     marginal_counts = Counter(nkey(item.get('text', '')) for item in all_items
                               if item.get('type') in ('header', 'footer'))
     for pi in sorted(by_page):
-        page_items = _sort_page_items(by_page[pi]) if mode == 'book' else by_page[pi]
+        page_items = _sort_page_items(by_page[pi]) if mode == 'book' and reading_order == 'geometry' else by_page[pi]
         actual_pi = pi + page_offset
         source = source_pages[pi] if source_pages and pi < len(source_pages) else None
         used_text: set[int] = set()
@@ -796,6 +799,9 @@ def main() -> None:
     parser.add_argument('--out', required=True, help='输出目录')
     parser.add_argument('--mode', choices=['slides', 'book'], default='slides',
                         help='slides 图片置顶；book 自然图文顺序、严格标题；保守保留跨页段落边界')
+    parser.add_argument('--reading-order', choices=['geometry', 'source'], default='geometry',
+                        help='geometry 按高度排序；source 保留经核对的 OCR 阅读顺序（双栏论文）')
+    parser.add_argument('--metadata-json', help='JSON：章节 id 到已核对元数据的映射，发布前写入 YAML frontmatter')
     parser.add_argument('--clean', action='store_true', help='已禁用：拒绝目录清理')
     parser.add_argument('--overwrite', action='store_true', help='显式覆盖所有权清单中已被修改的生成文件，绝不覆盖未登记文件')
     parser.add_argument('--manifest', help='分片清单 JSON 路径（支持多批块大文档组装与全局页码偏移计算）')
@@ -902,6 +908,11 @@ def main() -> None:
         raise ValueError('没有找到可装配的 OCR 结果')
     if previous.get('chapters') and previous.get('mode') != mode:
         raise ValueError('已有输出模式不同，请使用新输出目录')
+    metadata = json.loads(Path(args.metadata_json).read_text(encoding='utf-8')) if args.metadata_json else {}
+    if not isinstance(metadata, dict) or any(not isinstance(value, dict) for value in metadata.values()):
+        raise ValueError('metadata-json 必须是章节 id 到元数据对象的映射')
+    if metadata.keys() - identities:
+        raise ValueError('metadata-json 含未知章节 id')
     files_seen = set()
     for job in jobs:
         filename = relative_name(job['file'])
@@ -923,14 +934,22 @@ def main() -> None:
                 job['items'], job['source'], job['pdf'], image_dir, job['title'], review,
                 ocr_dir=job['ocr_dir'], mode=mode, page_offset=job['offset'],
                 keep_table_images=args.keep_table_images, page_map=page_map,
-                page_count=job['page_count'])
+                page_count=job['page_count'], reading_order=args.reading_order)
+            if job['id'] in metadata:
+                from research_metadata import render_frontmatter
+                header = render_frontmatter(metadata[job['id']])
+                text = header + text
+                for mapping in page_map:
+                    for key in ('start_line', 'end_line'):
+                        if mapping.get(key) is not None:
+                            mapping[key] += header.count('\n')
             page_maps[job['id']] = page_map
             # Images live at output root/images even for nested chapter paths.
             prefix = '../' * (len(Path(job['file']).parts) - 1)
             text = text.replace('](images/', '](' + prefix + 'images/')
             target = contained(stage, job['file'])
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding='utf-8')
+            target.write_text(text, encoding='utf-8', newline='\n')
             updated.append({'id': job['id'], 'file': job['file'], 'title': job['title'], **stats})
             review_all[job['id']] = review
         replacements = {entry['id']: entry for entry in updated}
@@ -947,7 +966,7 @@ def main() -> None:
         for entry in report:
             label = re.sub(r'[\[\]\n]', ' ', entry['title'])
             lines.append(f'- [{label}]({quote(entry["file"], safe="/")})')
-        (stage / '00-目录.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        (stage / '00-目录.md').write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
         if args.agent_index:
             from book_features import write_agent_index
             for entry in report:

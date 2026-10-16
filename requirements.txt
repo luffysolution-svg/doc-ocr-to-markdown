@@ -5,3 +5,4 @@ python-pptx>=1.0
 markdown>=3.5
 markdown-it-py>=3.0
 beautifulsoup4>=4.12
+PyYAML>=6.0
