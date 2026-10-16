@@ -94,14 +94,49 @@ images/                       # 切出的插图
 
 ### bbox 坐标系
 
-**`bbox` 是 0–1000 的归一化坐标** `[x0, y0, x1, y1]`，不是像素、不是 PDF point。换算：
+**本工具读取的 `content_list.json` 中，`bbox` 是 0–1000 的归一化坐标** `[x0, y0, x1, y1]`。换算为目标页面的像素或 PDF point：
 
 ```python
 x0 = box[0] / 1000 * page_width
 y0 = box[1] / 1000 * page_height
 ```
 
-用它裁图或和源文件对象做位置比对前，两边都要先统一到同一坐标系。
+`layout.json` 的块框是页面点坐标，须用该页的实际宽高转换，不能直接传给装配器或 repairs：
+
+```python
+norm_box = [box_pt[0] / page_width * 1000, box_pt[1] / page_height * 1000,
+            box_pt[2] / page_width * 1000, box_pt[3] / page_height * 1000]
+```
+
+先核对数据格式、该页尺寸与 PDF 页面的方向和原点；不能凭数值小于 1000 猜坐标单位，也不能写死全书宽高。图题位置从 layout 的 `image_caption` / `chart_caption` 子块读取；题注也可能误归入对应的 footnote 子块，需回源确认。content_list 中携带题注的图块框并非题注自身的位置。
+
+### 回源修复图块
+
+教材模式配合 `--manifest`、`--chapters`、`--pdf` 和 `--repairs repairs.json` 使用。`page` 为从 1 开始的全书 PDF 页码，所有 repairs 框均为 0–1000 坐标。先按原页核对，保留原始 OCR 数据；脚本不自动推断子图和图题归属。
+
+原位修正裁框及图题：
+
+```json
+[{
+  "page": 9,
+  "bbox": [400, 100, 900, 400],
+  "action": "update_image",
+  "old": {
+    "type": "image",
+    "img_path": "images/original.jpg",
+    "bbox": [400, 100, 900, 400],
+    "image_caption": ["图 1-2 原识别题注"],
+    "image_footnote": []
+  },
+  "new_bbox": [100, 100, 900, 400],
+  "image_caption": ["图 1-2 核对后的题注"],
+  "reason": "原页确认左侧子图被漏裁，并核对图下题注"
+}]
+```
+
+- `bbox` 定位原图；`new_bbox` 可省略以仅修题注。`old` 必须完整匹配原图的五个字段；缺失的 `img_path` 按 `""`、题注/脚注按 `[]` 填写。原块为 `chart` 时，old 使用 `chart_caption`、`chart_footnote`；顶层更新仍用 `image_caption`、`image_footnote`，脚本写回对应图型字段。值不匹配、定位歧义或重复修改同一块即停止。
+- `add_image` 也接受 `image_caption` / `image_footnote` 字符串列表，以 `after:{"bbox":[...],"text":"原始锚点"}` 决定阅读顺序。`skip` 跳过多余图块，`old` 为该块原始 `text`（缺失时 `""`）。合并时更新保留图块为确认后的并集框并跳过碎块；拆图时更新原块并按保留锚点顺序补图。同框补图冲突检查仍保留，不能以已跳过为由绕过。
+- 新增或更新后的图块保持明确边界，不再自动合并。新增图与改变裁框的图要求原 PDF 重裁，失败即停止，不回退旧裁片；仅改题注不要求重裁。审计留在外部构建状态，旧资产默认保留。
 
 ## 坑：结果下载域名连不上
 

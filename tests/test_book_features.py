@@ -29,7 +29,25 @@ def repair(**fields):
             'new': '校正正文', 'reason': '已核对源页', **fields}
 
 
+def image_repair(original, **fields):
+    return {'page': original['_page'], 'bbox': list(original['bbox']),
+            'action': 'update_image', 'reason': '已核对原图边界与题注',
+            'old': {key: copy.deepcopy(original.get(key, default)) for key, default in
+                    (('type', None), ('img_path', ''), ('bbox', None),
+                     (f'{original["type"]}_caption', []),
+                     (f'{original["type"]}_footnote', []))}, **fields}
+
+
 class RepairTests(unittest.TestCase):
+    def source_pdf(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / 'source.pdf'
+        with fitz.open() as pdf:
+            pdf.new_page()
+            pdf.save(path)
+        return path
+
     def test_exact_replacement_and_explicit_equation_to_prose_do_not_mutate(self):
         original = [block(kind='equation')]
         records = [repair(set_type='body_text', new='纯正文，含 α 与 Unicode 字符。')]
@@ -114,6 +132,177 @@ class RepairTests(unittest.TestCase):
             self.assertEqual(audit[0]['page'], 2)
             self.assertEqual(original[1]['text'], '相同文本')
 
+    def test_image_update_is_atomic_preserves_metadata_audit_and_inputs(self):
+        pdf_path = self.source_pdf()
+        for kind in ('image', 'chart'):
+            with self.subTest(kind=kind):
+                caption, footnote = f'{kind}_caption', f'{kind}_footnote'
+                original = [{**block(kind=kind), 'img_path': 'images/original.png',
+                             caption: ['原图题'], footnote: ['原图注']}]
+                records = [image_repair(original[0], new_bbox=[110, 210, 610, 410],
+                                        image_caption=['新图题', '第二行'], image_footnote=[])]
+                before, before_records = copy.deepcopy(original), copy.deepcopy(records)
+                fixed, audit = apply_repairs(original, records, pdf_path)
+                self.assertEqual(fixed, [{**original[0], 'bbox': records[0]['new_bbox'],
+                                         caption: ['新图题', '第二行'], footnote: [],
+                                         '_figure_boundary': True, '_recrop_required': True}])
+                self.assertEqual(audit, [{**records[0], 'applied': True}])
+                fixed[0]['bbox'][0] = 0
+                fixed[0][caption].append('输出独立')
+                audit[0]['old'][caption].append('审计独立')
+                audit[0]['new_bbox'][0] = 0
+                self.assertEqual(original, before)
+                self.assertEqual(records, before_records)
+
+    def test_image_update_defaults_and_caption_or_geometry_only(self):
+        original = [block(kind='image')]
+        pdf_path = self.source_pdf()
+        for change in ({'new_bbox': [110, 210, 610, 410]},
+                       {'image_caption': ['补充图题']}, {'image_footnote': ['补充图注']}):
+            with self.subTest(change=change):
+                fixed, _ = apply_repairs(original, [image_repair(original[0], **change)],
+                                         pdf_path if 'new_bbox' in change else None)
+                self.assertTrue(fixed[0]['_figure_boundary'])
+                self.assertEqual(fixed[0].get('_recrop_required', False), 'new_bbox' in change)
+                self.assertEqual(fixed[0]['bbox'], change.get('new_bbox', BOX))
+                for field in ('image_caption', 'image_footnote'):
+                    if field in change:
+                        self.assertEqual(fixed[0][field], change[field])
+                    else:
+                        self.assertNotIn(field, fixed[0])
+
+    def test_chart_update_replaces_native_captions_without_leaving_old_output(self):
+        from build_markdown import captions_of
+
+        original = [{**block(kind='chart'), 'img_path': 'chart.png',
+                     'chart_caption': ['旧chart题'], 'chart_footnote': ['旧chart注']}]
+        record = image_repair(original[0], image_caption=['新chart题'], image_footnote=['新chart注'])
+        self.assertEqual(set(record['old']),
+                         {'type', 'img_path', 'bbox', 'chart_caption', 'chart_footnote'})
+        fixed, _ = apply_repairs(original, [record])
+        self.assertEqual(captions_of(fixed), ['新chart题', '新chart注'])
+        self.assertNotIn('image_caption', fixed[0])
+        self.assertNotIn('image_footnote', fixed[0])
+        self.assertNotIn('_recrop_required', fixed[0])
+        cleared, _ = apply_repairs(original, [image_repair(
+            original[0], image_caption=[], image_footnote=[])])
+        self.assertEqual(captions_of(cleared), [])
+        bad_snapshots = [
+            {key: record['old'][key] for key in ('type', 'img_path', 'bbox')} |
+            {'image_caption': [], 'image_footnote': []},
+            {**record['old'], 'chart_caption': ['过期chart题']},
+            {**record['old'], 'chart_footnote': ['过期chart注']},
+        ]
+        for old in bad_snapshots:
+            with self.subTest(old=old), self.assertRaises(ValueError):
+                apply_repairs(original, [{**record, 'old': old}])
+        with self.assertRaisesRegex(ValueError, 'actual change'):
+            apply_repairs(original, [image_repair(original[0], image_caption=['旧chart题'])])
+        for field in ('chart_caption', 'chart_footnote'):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                apply_repairs(original, [{**record, field: ['不适用输入']}])
+        self.assertEqual(captions_of(original), ['旧chart题', '旧chart注'])
+
+    def test_image_bbox_change_requires_pdf_and_marks_recrop(self):
+        pdf_path = self.source_pdf()
+        for kind in ('image', 'chart'):
+            original = [{**block(kind=kind), 'img_path': 'old-crop.png'}]
+            for captions in ({}, {'image_caption': ['新题']}):
+                record = image_repair(original[0], new_bbox=[0, 0, 900, 900], **captions)
+                before, before_record = copy.deepcopy(original), copy.deepcopy(record)
+                with self.subTest(kind=kind, captions=captions):
+                    with self.assertRaisesRegex(ValueError, 'requires source PDF'):
+                        apply_repairs(original, [record])
+                    fixed, _ = apply_repairs(original, [record], pdf_path)
+                    self.assertTrue(fixed[0]['_recrop_required'])
+                    self.assertEqual(fixed[0]['bbox'], record['new_bbox'])
+                    self.assertEqual(fixed[0]['img_path'], 'old-crop.png')
+                    self.assertEqual(original, before)
+                    self.assertEqual(record, before_record)
+            # An explicitly unchanged bbox plus a real caption change needs no PDF/recrop.
+            fixed, _ = apply_repairs(original, [image_repair(
+                original[0], new_bbox=BOX, image_caption=['题注更新'])])
+            self.assertNotIn('_recrop_required', fixed[0])
+
+    def test_image_update_rejects_stale_incomplete_or_extra_old_snapshot(self):
+        original = [{**block(kind='image'), 'img_path': 'original.png',
+                     'image_caption': ['原图题'], 'image_footnote': ['原图注']}]
+        valid = image_repair(original[0], image_caption=['新图题'])
+        snapshots = ['原始正文', None, {}, {**valid['old'], 'text': '原始正文'}]
+        for field in valid['old']:
+            missing = copy.deepcopy(valid['old'])
+            missing.pop(field)
+            snapshots.append(missing)
+        for field, stale in (('type', 'chart'), ('img_path', 'stale.png'),
+                             ('bbox', [0, 0, 10, 10]), ('image_caption', []),
+                             ('image_footnote', [])):
+            snapshots.append({**valid['old'], field: stale})
+        for old in snapshots:
+            records = [{**valid, 'old': old}]
+            before, before_records = copy.deepcopy(original), copy.deepcopy(records)
+            with self.subTest(old=old), self.assertRaises(ValueError):
+                apply_repairs(original, records)
+            self.assertEqual(original, before)
+            self.assertEqual(records, before_records)
+
+    def test_image_update_rejects_invalid_changes_and_mixed_fields_atomically(self):
+        original = [block(kind='image')]
+        changes = [{}, {'new_bbox': BOX}, {'image_caption': [], 'image_footnote': []}]
+        changes.extend({'new_bbox': value} for value in
+                       (None, [1, 2, 3], [-1, 0, 10, 10], [0, 0, 1001, 1000],
+                        [100, 200, 100, 400], [0, 0, float('inf'), 1],
+                        [0, 0, float('nan'), 1], [False, 0, 10, 10]))
+        changes.extend({field: value} for field in ('image_caption', 'image_footnote')
+                       for value in (None, '图题', ('图题',), [1], [True], [['图题']]))
+        changes.extend({field: value} for field, value in
+                       (('field', 'text'), ('new', '正文'), ('set_type', 'image'),
+                        ('after', {'bbox': BOX, 'text': '原始正文'}),
+                        ('img_path', 'replacement.png'), ('_figure_boundary', False)))
+        for change in changes:
+            records = [image_repair(original[0], **change)]
+            before, before_records = copy.deepcopy(original), copy.deepcopy(records)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                apply_repairs(original, records)
+            self.assertEqual(original, before)
+            self.assertEqual(records, before_records)
+        # A valid geometry change must not survive an invalid caption in the same record.
+        with self.assertRaises(ValueError):
+            apply_repairs(original, [image_repair(original[0], new_bbox=[0, 0, 10, 10],
+                                                 image_caption='非法图题')])
+        self.assertEqual(original[0]['bbox'], BOX)
+
+    def test_image_update_uses_unique_original_location_and_conflicts_with_skip(self):
+        pdf_path = self.source_pdf()
+        image = block(kind='image')
+        update = image_repair(image, new_bbox=[0, 0, 10, 10])
+        skip = dict(page=1, bbox=BOX, action='skip', old='原始正文', reason='确认误图')
+        for original, records in (([block()], [image_repair(block(), image_caption=['题'])]),
+                                  ([image, image], [update]), ([image], [update, update]),
+                                  ([image], [{**update, 'bbox': [0, 0, 10, 10]}]),
+                                  ([image], [update, {**update, 'bbox': [0, 0, 10, 10]}]),
+                                  ([image], [update, skip]), ([image], [skip, update])):
+            before = copy.deepcopy(original)
+            with self.subTest(records=records), self.assertRaises(ValueError):
+                apply_repairs(original, records, pdf_path)
+            self.assertEqual(original, before)
+        for kind in ('image', 'chart'):
+            original = [block(kind=kind)]
+            fixed, audit = apply_repairs(original, [skip])
+            self.assertEqual(fixed, [])
+            self.assertEqual(audit, [{**skip, 'applied': True}])
+            self.assertEqual(original, [block(kind=kind)])
+
+    def test_image_fields_are_rejected_on_text_type_and_skip_repairs(self):
+        for action in ('replace', 'set_type', 'skip'):
+            base = repair() if action == 'replace' else dict(
+                page=1, bbox=BOX, action=action, old='原始正文', reason='核对')
+            if action == 'set_type':
+                base['set_type'] = 'body_text'
+            for field, value in (('image_caption', ['题']), ('image_footnote', []),
+                                 ('new_bbox', [0, 0, 10, 10]), ('after', {})):
+                with self.subTest(action=action, field=field), self.assertRaises(ValueError):
+                    apply_repairs([block()], [{**base, field: value}])
+
     def test_image_insertion_uses_original_anchor_and_retains_provenance(self):
         with tempfile.TemporaryDirectory() as folder:
             pdf_path = Path(folder) / 'source.pdf'
@@ -121,9 +310,12 @@ class RepairTests(unittest.TestCase):
                 pdf.new_page()
                 pdf.save(pdf_path)
             image = {'page': 1, 'bbox': [200, 500, 800, 900], 'action': 'add_image',
-                     'reason': '源PDF存在漏图', 'after': {'bbox': BOX, 'text': '原始正文'}}
+                     'reason': '源PDF存在漏图', 'after': {'bbox': BOX, 'text': '原始正文'},
+                     'image_caption': ['图1 漏图', '第二行'], 'image_footnote': ['图注']}
             original = [block(), block('随后正文', bbox=[10, 910, 900, 980])]
-            fixed, audit = apply_repairs(original, [repair(), image], pdf_path)
+            records = [repair(), image]
+            before, before_records = copy.deepcopy(original), copy.deepcopy(records)
+            fixed, audit = apply_repairs(original, records, pdf_path)
             self.assertEqual([b['type'] for b in fixed], ['text', 'image', 'text'])
             self.assertEqual(fixed[0]['text'], '校正正文')
             self.assertEqual(fixed[2]['text'], '随后正文')
@@ -131,7 +323,20 @@ class RepairTests(unittest.TestCase):
             for key in ('page_idx', '_page', '_ocr_dir'):
                 self.assertEqual(fixed[1][key], original[0][key])
             self.assertTrue(fixed[1]['_added_image'])
+            self.assertTrue(fixed[1]['_figure_boundary'])
+            for field in ('image_caption', 'image_footnote'):
+                self.assertEqual(fixed[1][field], image[field])
+                fixed[1][field].append('独立输出')
             self.assertEqual(audit[1], {**image, 'applied': True})
+            audit[1]['image_caption'].append('独立审计')
+            self.assertEqual(original, before)
+            self.assertEqual(records, before_records)
+            without_captions = {key: value for key, value in image.items()
+                                if key not in ('image_caption', 'image_footnote')}
+            fixed, _ = apply_repairs(original, [without_captions], pdf_path)
+            self.assertTrue(fixed[1]['_figure_boundary'])
+            for field in ('image_caption', 'image_footnote'):
+                self.assertNotIn(field, fixed[1])
             for blocks, records, pdf in [
                 (original, [image], None),
                 (original, [image, image], pdf_path),
@@ -140,9 +345,23 @@ class RepairTests(unittest.TestCase):
                 ([block(), block()], [image], pdf_path),
                 (original, [{**image, 'after': {'bbox': BOX, 'text': '过期锚点'}}], pdf_path),
                 ([block(page=2)], [repair(page=2)], pdf_path),
+                (original + [block(kind='image', bbox=image['bbox'])], [image], pdf_path),
+                (original + [block(kind='chart', bbox=image['bbox'])], [image], pdf_path),
+                (original + [block(kind='image', bbox=image['bbox'])],
+                 [dict(page=1, bbox=image['bbox'], action='skip', old='原始正文', reason='跳过'),
+                  image], pdf_path),
             ]:
                 with self.subTest(records=records), self.assertRaises(ValueError):
                     apply_repairs(blocks, records, pdf)
+            for field in ('image_caption', 'image_footnote'):
+                for value in (None, '图题', ('图题',), [1], [False], [['图题']]):
+                    with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                        apply_repairs(original, [{**image, field: value}], pdf_path)
+            for field, value in (('old', {}), ('new', '正文'), ('field', 'text'),
+                                 ('set_type', 'image'), ('new_bbox', [0, 0, 10, 10]),
+                                 ('img_path', 'replacement.png'), ('_figure_boundary', False)):
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    apply_repairs(original, [{**image, field: value}], pdf_path)
 
 
 class ChunkTests(unittest.TestCase):

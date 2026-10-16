@@ -311,6 +311,17 @@ def full_page_scan(item: dict) -> bool:
     return x1 - x0 >= 0.95 and y1 - y0 >= 0.95
 
 
+def figure_numbers(items: list[dict]) -> set[str]:
+    """Only explicit caption prefixes identify a figure for merge conflicts."""
+    numbers = set()
+    for caption in captions_of(items):
+        match = re.match(r'^\s*(?:图\s*|(?:Figure|Fig\.?)\s*)(\d+(?:\s*[-－–—.]\s*\d+)*)',
+                         normalize('NFKC', caption), re.I)
+        if match:
+            numbers.add(re.sub(r'\s+', '', match[1]).translate(str.maketrans('－–—', '---')))
+    return numbers
+
+
 def image_groups(items: list[dict]) -> dict[int, list[dict]]:
     """Merge overlapping fragments without changing OCR order or merging references.
 
@@ -325,10 +336,16 @@ def image_groups(items: list[dict]) -> dict[int, list[dict]]:
             index += 1
             continue
         group = [item]
+        numbers = figure_numbers(group)
         cursor = index + 1
         while cursor < len(items):
             other = items[cursor]
             if other.get('type') not in ('image', 'chart') or full_page_scan(other):
+                break
+            if group[-1].get('_figure_boundary') or other.get('_figure_boundary'):
+                break
+            other_numbers = figure_numbers([other])
+            if numbers and other_numbers and len(numbers | other_numbers) > 1:
                 break
             box, ob = union_box([box_of(g) for g in group]), box_of(other)
             same_reference = any(
@@ -338,6 +355,7 @@ def image_groups(items: list[dict]) -> dict[int, list[dict]]:
             if same_reference or max(overlap(ob, box), overlap(box, ob)) < 0.35:
                 break
             group.append(other)
+            numbers.update(other_numbers)
             cursor += 1
         groups[index] = group
         index = cursor
@@ -386,6 +404,29 @@ def inline_math(text: str) -> str:
     return process(text)
 
 
+def fenced_code(body: str) -> str:
+    """Unwrap one complete outer fence, then fence without content collisions."""
+    info = ''
+    lines = body.splitlines(keepends=True)
+    opening = re.fullmatch(r' {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n)?', lines[0]) if lines else None
+    if opening and (opening[1][0] != '`' or '`' not in opening[2]):
+        marker = opening[1]
+        closing = rf' {{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*(?:\r?\n)?'
+        for index, line in enumerate(lines[1:], 1):
+            if re.fullmatch(closing, line):
+                if index == len(lines) - 1:
+                    from markdown_it import MarkdownIt
+                    token = MarkdownIt('commonmark').parse(body)[0]
+                    body, info = token.content, token.info
+                break
+    char = '~' if '`' in info else '`'
+    longest = max((len(run) for run in re.findall(re.escape(char) + '+', body)), default=0)
+    fence = char * max(3, longest + 1)
+    if body and not body.endswith('\n'):
+        body += '\n'
+    return f'{fence}{info}\n{body}{fence}'
+
+
 def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: Path | None,
                   image_dir: Path, title: str, review: list,
                   ocr_dir: Path | None = None, mode: str = 'slides',
@@ -426,6 +467,7 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
     in_exercises = False
     have_section = False
     previous_level = 1
+    code_blocks = set()
     all_items = [item for pi in sorted(by_page) for item in by_page[pi]]
     title_parts = {id(all_items[i]) for i in chapter_title_parts(all_items, title)} if mode == 'book' else set()
     marginal_counts = Counter(nkey(item.get('text', '')) for item in all_items
@@ -483,7 +525,11 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                 box = union_box([box_of(member) for member in group])
                 caps = captions_of(group)
                 names = []
-                match = best_picture_match(box, source['pictures'], set()) if source else None
+                recrop_required = any(member.get('_recrop_required') or member.get('_added_image')
+                                      for member in group)
+                if recrop_required and pdf is None:
+                    raise ValueError(f'修复图片必须从原 PDF 重裁: page={actual_pi + 1}')
+                match = best_picture_match(box, source['pictures'], set()) if source and not recrop_required else None
                 if match and overlap(box, match[2]['box']) >= 0.9:
                     names.append(store.store(match[2]['blob'], match[2]['ext']))
                     stats['native_figures'] += 1
@@ -492,6 +538,8 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                     if blob:
                         names.append(store.store(blob, 'png'))
                         stats['cropped_figures'] += 1
+                if recrop_required and not names:
+                    raise ValueError(f'修复图片 PDF 重裁失败: page={actual_pi + 1}')
                 if not names:
                     # A failed union crop falls back to every fragment, preserving data.
                     for member in group:
@@ -651,7 +699,9 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
             if kind in ('code', 'algorithm'):
                 body = item.get('code_body') or item.get('text', '')
                 if body:
-                    emit.append(f'```\n{body}\n```')
+                    code = fenced_code(body)
+                    code_blocks.add(code)
+                    emit.append(code)
                 continue
             if item.get('text'):
                 text = re.sub(r'[ \t]+', ' ', str(item['text'])).strip()
@@ -670,9 +720,9 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                              'status': 'included' if output_blocks else 'no_output',
                              'ocr_blocks': len(page_items)})
 
-    text = '\n\n'.join(b for b in content if b and b.strip())
     if page_map is None:
-        text = re.sub(r'\n{3,}', '\n\n', text)
+        content = [b if b in code_blocks else re.sub(r'\n{3,}', '\n\n', b) for b in content]
+    text = '\n\n'.join(b for b in content if b and b.strip())
     stats['figures'] = store.count
     return text.strip() + '\n', dict(stats)
 

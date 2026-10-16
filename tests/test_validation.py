@@ -55,6 +55,66 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(r['status'], 'pass', r)
         self.assertEqual(r['warnings'], [])
 
+    def test_unclosed_fence_reports_hidden_image(self):
+        self.note('# Note\n\n```\n![a](images/a.png)\n')
+        r = self.report()
+        self.assertEqual(r['status'], 'fail', r)
+        self.assertTrue(any('围栏未闭合' in error for error in r['errors']))
+        self.assertEqual(r['detail'][0]['source_image_candidates'], 1)
+        self.assertEqual(r['detail'][0]['parsed_images'], 0)
+
+    def test_duplicate_fences_warn_about_swallowed_image(self):
+        self.note('# Note\n\n```\n```python\nprint(1)\n```\n```\n\n![a](images/a.png)\n\n```\n')
+        r = self.report()
+        self.assertTrue(any('图片引用' in warning and '遮蔽' in warning for warning in r['warnings']))
+        self.assertEqual(r['total_images'], 0)
+
+    def test_labelled_code_image_example_is_allowed(self):
+        self.note('# Note\n\n```markdown\n![example](missing.png)\n```\n\n![a](images/a.png)\n')
+        r = self.report()
+        self.assertEqual(r['status'], 'pass', r)
+        self.assertEqual(r['warnings'], [])
+        self.assertEqual(r['detail'][0]['source_image_candidates'], 2)
+        self.assertEqual(r['detail'][0]['parsed_images'], 1)
+
+    def test_closed_fences_in_containers_are_allowed(self):
+        self.note('# Note\n\n> ```markdown\n> ![example](missing.png)\n> ```\n\n![a](images/a.png)\n')
+        r = self.report()
+        self.assertEqual(r['status'], 'pass', r)
+        self.assertEqual(r['warnings'], [])
+
+    def test_closed_fences_allow_non_markdown_line_separators(self):
+        for separator in ('\u2028', '\v', '\f'):
+            with self.subTest(separator=repr(separator)):
+                self.note('# Note\n\n```text\nleft' + separator + 'right\n```\n\n![a](images/a.png)\n')
+                r = self.report()
+                self.assertEqual(r['status'], 'pass', r)
+                self.assertEqual(r['warnings'], [])
+
+    def test_source_candidates_count_adjacent_images_separately(self):
+        self.note('# Note\n\n![a](images/a.png) ![b](images/a.png)\n')
+        r = self.report()
+        self.assertEqual(r['status'], 'pass', r)
+        self.assertEqual(r['detail'][0]['source_image_candidates'], 2)
+        self.assertEqual(r['detail'][0]['parsed_images'], 2)
+
+    def test_missing_image_still_counts_as_parsed(self):
+        self.note('# Note\n\n![missing](images/missing.png)\n')
+        r = self.report()
+        self.assertEqual(r['status'], 'fail')
+        self.assertEqual(r['detail'][0]['parsed_images'], 1)
+        self.assertEqual(r['total_images'], 0)
+
+    def test_orphan_details_do_not_delete_files(self):
+        orphan = self.root / 'images/unused.png'
+        Image.new('RGB', (10, 10)).save(orphan)
+        self.note('# Note\n\n![a](images/a.png)\n')
+        r = self.report()
+        self.assertEqual(r['status'], 'pass', r)
+        self.assertEqual(r['orphan_images'], ['images/unused.png'])
+        self.assertTrue(any('images/unused.png' in warning for warning in r['warnings']))
+        self.assertTrue(orphan.exists())
+
 
 if __name__ == '__main__':
     unittest.main()

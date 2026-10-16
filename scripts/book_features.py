@@ -41,7 +41,14 @@ def apply_repairs(blocks, repairs, pdf_path=None):
 
     Text: {page,bbox,field:'text',old,new,reason[,set_type]}.
     Type/skip: {page,bbox,action:'set_type'|'skip',old,reason[,set_type]}.
-    Image: {page,bbox,action:'add_image',reason,after:{bbox,text}}; requires PDF.
+    Add image: {page,bbox,action:'add_image',reason,after:{bbox,text}}; requires PDF.
+    Update image/chart: {page,bbox,action:'update_image',old,reason[,new_bbox]}.
+    Image actions accept image_caption/image_footnote as lists of strings;
+    updates write them to the original type's image_* or chart_* fields.
+    Update old has exactly type,img_path,bbox and that type's caption/footnote;
+    missing original img_path defaults to '', captions/footnotes to [].
+    Updates must change geometry or captions. Geometry changes require a source
+    PDF and set _recrop_required=True. Explicit images retain boundaries.
     A block may be edited once. All anchors/old values refer to ORIGINAL input;
     neither chaining edits nor silently accepting stale records is permitted.
     """
@@ -74,13 +81,23 @@ def apply_repairs(blocks, repairs, pdf_path=None):
         if not isinstance(record.get('reason'), str) or not record['reason'].strip():
             raise ValueError('repair requires a nonempty reason')
         action = record.get('action', 'replace')
-        if not isinstance(action, str) or action not in {'replace', 'skip', 'set_type', 'add_image'}:
+        if not isinstance(action, str) or action not in {'replace', 'skip', 'set_type', 'add_image', 'update_image'}:
             raise ValueError(f'unsupported repair action: {action!r}')
+        image_fields = ('image_caption', 'image_footnote')
+        if action in ('add_image', 'update_image'):
+            allowed = {'page', 'bbox', 'action', 'reason', *image_fields}
+            allowed.update(('after',) if action == 'add_image' else ('old', 'new_bbox'))
+            if record.keys() - allowed:
+                raise ValueError('image repair contains inapplicable fields')
+            for field in image_fields:
+                if field in record and (not isinstance(record[field], list)
+                                        or any(not isinstance(v, str) for v in record[field])):
+                    raise ValueError(f'{field} must be a list of strings')
+        elif any(key in record for key in (*image_fields, 'new_bbox', 'after')):
+            raise ValueError('text/type/skip repair conflicts with image repair fields')
         if action == 'add_image':
             if pdf_path is None:
                 raise ValueError('add_image requires source PDF')
-            if any(key in record for key in ('field', 'old', 'new', 'set_type')):
-                raise ValueError('add_image conflicts with text/type repair fields')
             anchor = record.get('after')
             if not isinstance(anchor, dict) or not isinstance(anchor.get('text'), str):
                 raise ValueError('add_image requires after:{bbox,text}')
@@ -97,8 +114,37 @@ def apply_repairs(blocks, repairs, pdf_path=None):
             original = originals[index]
             image = {key: deepcopy(original[key]) for key in ('_page', '_ocr_dir', 'page_idx')
                      if key in original}
-            image.update(type='image', bbox=list(box), _added_image=True)
+            image.update(type='image', bbox=list(box), _added_image=True, _figure_boundary=True)
+            image.update({field: deepcopy(record[field]) for field in image_fields if field in record})
             insertions.setdefault(index, []).append(image)
+        elif action == 'update_image':
+            candidates = locations.get((page, box), [])
+            if len(candidates) != 1:
+                raise ValueError('repair must uniquely match an original page/bbox')
+            index = candidates[0]
+            original = originals[index]
+            if original.get('type') not in ('image', 'chart'):
+                raise ValueError('update_image requires an original image/chart')
+            caption_fields = (f'{original["type"]}_caption', f'{original["type"]}_footnote')
+            snapshot = {field: deepcopy(original.get(field, default)) for field, default in
+                        (('type', None), ('img_path', ''), ('bbox', None),
+                         (caption_fields[0], []), (caption_fields[1], []))}
+            if not isinstance(record.get('old'), dict) or record['old'] != snapshot:
+                raise ValueError('stale repair: old image snapshot does not match original')
+            if index in edits:
+                raise ValueError('duplicate/conflicting repair for original block')
+            changes = {target: deepcopy(record[field]) for field, target in
+                       zip(image_fields, caption_fields) if field in record}
+            if 'new_bbox' in record:
+                changes['bbox'] = list(_box(record['new_bbox']))
+            if not any(value != snapshot[field] for field, value in changes.items()):
+                raise ValueError('update_image requires an actual change')
+            if 'bbox' in changes and _box(changes['bbox']) != box:
+                if pdf_path is None:
+                    raise ValueError('image bbox change requires source PDF')
+                changes['_recrop_required'] = True
+            edits.add(index)
+            result[index].update(changes, _figure_boundary=True)
         else:
             candidates = locations.get((page, box), [])
             if len(candidates) != 1:

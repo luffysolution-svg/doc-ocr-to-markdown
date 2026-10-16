@@ -7,7 +7,8 @@
 检查项：
     - 每个文件只有一个一级标题，标题层级不跳跃
     - 标题里没有 LaTeX 残留
-    - 图片引用数与实际文件数一致、无重复引用、无失效链接
+    - 图片链接有效、允许共享资产；报告未引用资产与代码块遮蔽的图片
+    - 代码围栏闭合，分别统计源图片候选、解析图片与有效本地引用
     - 无残留编辑痕迹（页码、"来源"、"第 N 页"、工作目录路径等）
     - 所有图片可解码
     - 公式定界符配对，括号配平
@@ -98,15 +99,27 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
         warnings.append(f'{name}: 括号不配平「{issue}」')
 
     # 图片引用与链接
-    images = tables = 0
+    images = tables = parsed_images = 0
+    source_candidates = len(re.findall(r'(?<!\\)!\[[^\]\n]*\]\([^\)\n]*\)', text))
     if MarkdownIt is not None:
         parser = MarkdownIt('commonmark', {'html': True}).enable('table')
         for token in parser.parse(text):
+            if token.type == 'fence' and token.map:
+                start, end = token.map
+                # A closed fence spans its content plus opening and closing lines,
+                # including when Markdown containers prefix the source lines.
+                if end - start < token.content.count('\n') + 2:
+                    errors.append(f'{name}:{start + 1}: 代码围栏未闭合，后续图片可能无法显示')
+                if not token.info.strip() and re.search(r'!\[[^\]\n]*\]\(', token.content):
+                    warnings.append(f'{name}:{start + 1}: 无语言代码围栏内有图片引用，可能被遮蔽；'
+                                    '若为代码示例请标注 markdown 等语言')
             if token.type == 'table_open':
                 tables += 1
             for child in token.children or []:
                 if child.type not in ('image', 'link_open'):
                     continue
+                if child.type == 'image':
+                    parsed_images += 1
                 dest = child.attrGet('src' if child.type == 'image' else 'href')
                 if not dest:
                     continue
@@ -146,6 +159,8 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
                 errors.append(f'{name}: 链接失效 {match.group(2)}')
 
     return errors, warnings, {'file': name, 'characters': len(text), 'images': images,
+                              'source_image_candidates': source_candidates,
+                              'parsed_images': parsed_images if MarkdownIt is not None else None,
                               'tables': tables, 'math': len(math_spans)}
 
 
@@ -166,11 +181,12 @@ def validate(root: Path, images_dir: Path | None) -> dict:
 
     duplicates = [name for name, count in image_hashes.items() if count > 1]
 
+    orphans = []
     if images_dir and images_dir.exists():
-        orphans = [f for f in images_dir.rglob('*.*')
-                   if f.is_file() and str(f.relative_to(root)).replace('\\', '/') not in image_hashes]
+        orphans = sorted(f.relative_to(root).as_posix() for f in images_dir.rglob('*.*')
+                         if f.is_file() and f.relative_to(root).as_posix() not in image_hashes)
         if orphans:
-            warnings.append(f'{len(orphans)} 张图片未被任何文档引用')
+            warnings.append(f'{len(orphans)} 张图片未被任何文档引用：' + '、'.join(orphans[:10]))
 
     from book_features import validate_agent_index
     errors.extend(validate_agent_index(root))
@@ -183,6 +199,7 @@ def validate(root: Path, images_dir: Path | None) -> dict:
         'total_math': sum(d['math'] for d in documents),
         'total_characters': sum(d['characters'] for d in documents),
         'duplicate_images': len(duplicates),
+        'orphan_images': orphans,
         'errors': errors,
         'warnings': warnings,
         'detail': documents,

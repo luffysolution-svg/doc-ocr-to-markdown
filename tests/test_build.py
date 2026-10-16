@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import fitz
 from PIL import Image
+from markdown_it import MarkdownIt
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -170,6 +171,51 @@ class BuildTests(unittest.TestCase):
         with Image.open(self.base / 'render' / self.refs(text)[0]) as image:
             self.assertAlmostEqual(image.width / image.height, 2.8, places=2)
 
+    def test_image_groups_respect_explicit_boundaries_on_either_side(self):
+        for marked in (0, 1, 2):
+            with self.subTest(marked=marked):
+                items = [block('image', img_path=f'{i}.png',
+                               bbox=[100 + i * 50, 200, 600 + i * 50, 700])
+                         for i in range(3)]
+                items[marked]['_figure_boundary'] = True
+                groups = list(build.image_groups(items).values())
+                self.assertIn([items[marked]], groups)
+                self.assertEqual([item for group in groups for item in group], items)
+                self.assertEqual([len(group) for group in groups],
+                                 [1, 1, 1] if marked == 1 else ([1, 2] if marked == 0 else [2, 1]))
+
+    def test_image_groups_block_conflicting_figure_numbers(self):
+        for left, right in [('图1-2 左图', '图 1－3 右图'),
+                            ('Figure 1-2. Left', 'Fig. 1-3 Right'),
+                            ('FIGURE 12 Left', 'fig. 13 Right'),
+                            ('图1-2 左图', 'Figure 1-3 Right')]:
+            with self.subTest(left=left, right=right):
+                items = [block('image', img_path='a.png', bbox=[100, 200, 600, 700],
+                               image_caption=[left]),
+                         block('chart', img_path='b.png', bbox=[150, 200, 650, 700]),
+                         block('image', img_path='c.png', bbox=[200, 200, 700, 700],
+                               image_caption=[right])]
+                self.assertEqual(list(build.image_groups(items).values()), [items[:2], items[2:]])
+
+    def test_image_groups_keep_existing_overlap_rules_and_untitled_behavior(self):
+        for left, right in [('图1-2 左图', '图 1－2 右图'),
+                            ('Figure 1-2 Left', 'Fig. 1-2 Right'),
+                            ('图1-2 左图', 'Figure 1-2 Right'),
+                            ('', '图1-2 图题'), ('图1-2 图题', ''), ('', '')]:
+            with self.subTest(left=left, right=right):
+                items = [block('image', img_path='a.png', bbox=[100, 200, 600, 700],
+                               image_caption=[left]),
+                         block('chart', img_path='b.png', bbox=[150, 200, 650, 700],
+                               chart_caption=right)]
+                self.assertEqual(list(build.image_groups(items).values()), [items])
+                items[1]['bbox'] = [700, 200, 900, 700]
+                self.assertEqual(list(build.image_groups(items).values()), [[items[0]], [items[1]]])
+                items[1]['bbox'] = items[0]['bbox']
+                self.assertEqual(list(build.image_groups(items).values()), [[items[0]], [items[1]]])
+                items[1]['bbox'] = [150, 200, 650, 700]
+                items[1]['img_path'] = 'a.png'
+                self.assertEqual(list(build.image_groups(items).values()), [[items[0]], [items[1]]])
+
     def test_crop_failure_falls_back_to_ocr(self):
         self.book(total=1, pdf=True)
         ocr = self.part('part01', [])
@@ -178,6 +224,50 @@ class BuildTests(unittest.TestCase):
                                       ocr_dir=ocr, pdf_path=self.base / 'source.pdf')
         self.assertEqual(len(self.refs(text)), 1)
         self.assertEqual(stats['ocr_figures'], 1)
+
+    def test_repaired_images_require_successful_pdf_crop(self):
+        self.book(total=1, pdf=True)
+        ocr = self.part('part01', [])
+        for marker in ('_recrop_required', '_added_image'):
+            with self.subTest(marker=marker):
+                item = block('image', img_path='images/same.png', **{marker: True})
+                with self.assertRaisesRegex(ValueError, '必须从原 PDF 重裁'):
+                    self.render([item], ocr_dir=ocr)
+                with patch.object(build.FigureStore, 'crop', return_value=None):
+                    with self.assertRaisesRegex(ValueError, 'PDF 重裁失败'):
+                        self.render([item], ocr_dir=ocr, pdf_path=self.base / 'source.pdf')
+
+    def test_repaired_expanded_bbox_crops_new_pdf_pixels_instead_of_reusing_native_image(self):
+        from book_features import apply_repairs
+        pdf_path = self.base / 'edge.pdf'
+        with fitz.open() as doc:
+            page = doc.new_page(width=200, height=100)
+            page.draw_rect(page.rect, color=(1, 0, 0), fill=(1, 0, 0))
+            page.draw_rect(fitz.Rect(140, 20, 180, 80), color=(0, 0, 1), fill=(0, 0, 1))
+            doc.save(pdf_path)
+        ocr = self.part('part01', [], color='green')
+        item = block('image', bbox=[100, 200, 500, 800], img_path='images/same.png',
+                     image_caption=['图1 原图'], _page=1)
+        old = {field: item.get(field, []) for field in
+               ('type', 'bbox', 'img_path', 'image_caption', 'image_footnote')}
+        repaired, _ = apply_repairs([item], [{
+            'page': 1, 'bbox': item['bbox'], 'action': 'update_image', 'old': old,
+            'new_bbox': [100, 200, 900, 800], 'reason': '原 PDF 边缘有蓝色标记'
+        }], pdf_path)
+        self.assertTrue(repaired[0]['_recrop_required'])
+        source = [{'texts': [], 'pictures': [{'box': (0.1, 0.2, 0.9, 0.8),
+                                              'blob': png('green'), 'ext': 'png'}]}]
+        image_dir = self.base / 'render' / 'images' / 'ch'
+        with patch.object(build, 'best_picture_match', side_effect=AssertionError('must recrop')):
+            text, stats = build.build_chapter(repaired, source, pdf_path, image_dir,
+                                             '传入标题', [], ocr_dir=ocr, mode='book')
+        self.assertEqual(stats['cropped_figures'], 1)
+        self.assertEqual(stats.get('native_figures', 0), 0)
+        self.assertEqual(stats.get('ocr_figures', 0), 0)
+        with Image.open(self.base / 'render' / self.refs(text)[0]) as image:
+            rgb = image.convert('RGB')
+            self.assertEqual(rgb.getpixel((image.width // 4, image.height // 2)), (255, 0, 0))
+            self.assertEqual(rgb.getpixel((image.width * 7 // 8, image.height // 2)), (0, 0, 255))
 
     def test_crop_exception_returns_failure(self):
         class BrokenPage:
@@ -361,6 +451,50 @@ class BuildTests(unittest.TestCase):
         self.assertIn(r'\(x+1\)', text)
         self.assertIn(r'`$\cdotkg$`', text)
         self.assertIn('```\n' + r'$\cdotkg$' + '\n```', text)
+
+    def test_code_fences_parse_without_swallowing_following_prose_or_images(self):
+        ocr = self.part('part01', [])
+        cases = [
+            ('ordinary', '  print("hello")\n\n\nprint("world")\n\n',
+             '  print("hello")\n\n\nprint("world")\n\n', ''),
+            ('language', '```python\nprint("hello")\n```', 'print("hello")\n', 'python'),
+            ('indented', '  ```python\n  x = 1\n  ```', 'x = 1\n', 'python'),
+            ('relative indentation', '   ```python\n   if True:\n       x = 1\n   ```',
+             'if True:\n    x = 1\n', 'python'),
+            ('tildes', '~~~python\nprint("hello")\n~~~~\n', 'print("hello")\n', 'python'),
+            ('nested', '````markdown\n```python\nx = 1\n```\n````',
+             '```python\nx = 1\n```\n', 'markdown'),
+            ('literal fences', 'before\n```\n~~~~~\n`````\nafter',
+             'before\n```\n~~~~~\n`````\nafter\n', ''),
+            ('unclosed', '```python\nx = 1', '```python\nx = 1\n', ''),
+            ('mismatched', '```python\nx = 1\n~~~', '```python\nx = 1\n~~~\n', ''),
+            ('short closer', '````python\nx = 1\n```', '````python\nx = 1\n```\n', ''),
+            ('trailing content', '```python\nx = 1\n```\nkeep me',
+             '```python\nx = 1\n```\nkeep me\n', ''),
+            ('early closer', '```python\nx = 1\n```\nkeep me\n```',
+             '```python\nx = 1\n```\nkeep me\n```\n', ''),
+            ('strip one layer', '~~~~markdown\n~~~python\nx = 1\n~~~\n~~~~',
+             '~~~python\nx = 1\n~~~\n', 'markdown'),
+            ('backtick info', '~~~lang `option`\nx = 1\n~~~', 'x = 1\n', 'lang `option`'),
+            ('empty', '```python\n```', '', 'python'),
+        ]
+        for kind in ('code', 'algorithm'):
+            for name, source, expected, info in cases:
+                for mapped in (False, True):
+                    with self.subTest(kind=kind, case=name, mapped=mapped):
+                        fields = {'code_body': source} if kind == 'code' else {'text': source}
+                        text, _ = self.render([
+                            block(kind, **fields), block(text='代码后正文。'),
+                            block('image', img_path='images/same.png', image_caption=['图1 后续图片'])
+                        ], ocr_dir=ocr, page_map=[] if mapped else None)
+                        tokens = MarkdownIt('commonmark').parse(text)
+                        fences = [token for token in tokens if token.type == 'fence']
+                        self.assertEqual(len(fences), 1)
+                        self.assertEqual(fences[0].content, expected)
+                        self.assertEqual(fences[0].info.strip(), info)
+                        children = [child for token in tokens for child in token.children or []]
+                        self.assertIn('代码后正文。', [child.content for child in children if child.type == 'text'])
+                        self.assertEqual(sum(child.type == 'image' for child in children), 1)
 
     def test_missing_part_fails_even_with_only_and_preserves_output(self):
         self.book()

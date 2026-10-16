@@ -1,6 +1,6 @@
 ---
 name: doc-ocr-to-markdown
-description: 把扫描教材、PDF图书、理工科课件、学术论文、讲义等整理成带高清图片、表格和可渲染LaTeX公式的Markdown知识库。当用户提出"整理成markdown"、"转成知识库"、"OCR识别教材/课件"、"提取公式"、"做成Obsidian笔记"、"扫描件转文字"、"教材分章节转md"，或需要将大批量学术文档转为结构化知识库供人类精读或Agent/RAG检索时使用。覆盖大文档智能分片、MinerU云端OCR、源文件文字交叉纠错、高清原图裁切与去重、科学公式归一化、单元格内嵌二维码提取、KaTeX全量100%编译校验与浏览器实渲闭环。
+description: 将扫描教材、PDF图书、理工科课件、论文和讲义整理为带高清图片、表格与LaTeX公式的Markdown知识库。用于文档OCR、教材分章节转md、提取公式、制作Obsidian笔记，以及排查转换后图片缺失、子图拆散、图题错挂或裁图不全。支持大文档分片、MinerU云端OCR、回源校正、图表保真、公式全量KaTeX编译与浏览器渲染验收。
 ---
 
 # 文档转 Markdown 知识库 (doc-ocr-to-markdown)
@@ -43,7 +43,7 @@ python scripts/mineru_ocr.py split <源PDF路径> --out-root ./ocr-work --chunk-
 python scripts/mineru_ocr.py submit --out-root ./ocr-work --id-file ./ocr-work/ids.tsv
 ```
 
-- **坐标系统**：MinerU 返回的 `bbox` 永远是 **0–1000 归一化坐标**。换算真实像素/点阵必须乘以页面实际宽高 `[x0/1000*W, y0/1000*H, x1/1000*W, y1/1000*H]`。
+- **坐标系统**：本工具读取的 `content_list.json` 使用 **0–1000 归一化坐标**，裁图时按实际页面宽高换算；`layout.json` 的页面点坐标须先按该页宽高归一化，不能混用或写死整本书尺寸。定位图题时使用 layout 中题注本身的框，不能用所属图块框代替（见 `references/mineru-api.md`）。
 - **网络回退**：若遇 `cdn-mineru.openxlab.org.cn` TLS 握手 EOF，脚本已内置公共 DoH 获取真实 IP 并使用 `curl --resolve` 绕过 fake-IP 劫持（详见 `references/mineru-api.md`）。
 
 ### 步骤 2：用原生文字校正 OCR 错字（PPTX/有文字层 PDF）
@@ -62,6 +62,7 @@ OCR 会出现形近字、同音字或英文字母误识（如“轫致辐射”�
 
 - **去重**：按 SHA-256 / SHA-1 内容哈希去重，杜绝挂图讲解产生的重复资产。
 - **图内标签过滤**：文字块完全落在图片区域内（重叠度 > 0.6）且小于 12 字符的标签，丢弃不重复为正文。
+- **图块异常**：自动合并仅覆盖连续且重叠的碎片；并排子图、错挂/遗漏图题或裁框截断须回看原页，核对全部面板、尺寸线与标注后用 `--repairs` 修复。不因距离近自动合图，也不把单本教材的页码、尺寸或题注方向假设作为通用规则。
 
 ### 步骤 4：科学公式严谨归一化
 
@@ -92,6 +93,7 @@ python scripts/build_markdown.py --raw ./ocr-work/raw --out ./知识库 \
 - **干净交付**：默认只生成导航、正文 Markdown 和图片；构建状态位于输出旁的 `.<目录名>.build/`，可用 `--state-dir` 指定外部工作目录。
 - **可选检索**：仅当用户明确要求后续 Agent 检索、RAG 时添加 `--agent-index`，生成 `agent/` 分块与原页映射。
 - **回源修复**：`--repairs repairs.json` 接受 `[{"page":1,"bbox":[100,200,800,300],"field":"text","old":"原识别","new":"核对后的内容","reason":"原页核对依据"}]`；可附 `set_type:"body_text"` 强制正文或 `set_type:"page_footnote"` 保留脚注，`text` 则仍参与标题判定。补原图使用 `action:"add_image"`、裁切 `bbox` 和 `after:{"bbox":[...],"text":"原始锚点"}`。旧值或定位不匹配立即停止，审计留在外部构建状态。
+- **图块修复**：`action:"update_image"` 用原 `page+bbox` 和完整 `old` 图块快照核对后，原子修改 `new_bbox`、`image_caption` / `image_footnote`；`add_image` 也支持题注，配合 `skip` 处理确认后的合图、拆图。新增或改框必须从原 PDF 重裁，修复图块不再自动合并。格式及 chart 字段规则按需读取 `references/mineru-api.md` 的“回源修复图块”。
 - **过滤模型泄漏**：自动清除 `The Ground Truth...` 等模型推理遗留文本。
 
 ### 步骤 6：交付前全量校验（核心质量门禁）
@@ -107,6 +109,8 @@ python scripts/extract_formulas.py ./知识库 --out formulas.json
 node scripts/validate_math.cjs formulas.json
 ```
 
+检查围栏未闭合错误与图片遮蔽警告；合法图片语法示例须标注代码语言（如 `markdown`）。源图片候选数、解析图片数与有效引用数含义不同，不能直接要求相等。未引用资产会列出路径，默认保留；重建可用新目录核验，不清空已有知识库。
+
 ### 步骤 7：浏览器实际渲染沙箱验收
 
 启动本地离线渲染服务，通过自动化或人工查看确认图片正常、公式报错为 0：
@@ -114,7 +118,7 @@ node scripts/validate_math.cjs formulas.json
 ```bash
 python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/node_modules/katex/dist
 ```
-- 打开 `http://127.0.0.1:8766/` 验证 `document.documentElement.dataset.ready === "true"` 且 `.math-error` 数量为 0。
+- 打开 `http://127.0.0.1:8766/` 验证 `document.documentElement.dataset.ready === "true"` 且 `.math-error` 数量为 0；检查各章实际图片数量与加载状态。加载成功只证明文件可显示，异常图仍须逐幅对照原页确认面板、题注和裁框完整。
 
 ---
 
@@ -124,7 +128,7 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 | :--- | :--- | :--- |
 | **归一化与语法** | **严格收紧 (Zero Tolerance)** | 坐标转换公式、KaTeX 编译通过率必须 **100%**；严禁出现未闭合定界符、绝对路径或损坏图片链接。 |
 | **文件完整性** | **严格收紧** | 必须包含 `00-目录.md` 导航入口；图片全量可解码；严禁破坏性清空输出目录。 |
-| **排版与段落合并** | **自适应灵活 (Moderate)** | 允许根据书籍逻辑组织前言、目录、章节、附录与索引；平滑处理断行；合理合并子图。 |
+| **排版与段落合并** | **自适应灵活 (Moderate)** | 根据书籍逻辑组织章节、保守处理段落；子图合并与图题改挂须有原页依据，确认后的图块边界不再自动合并。 |
 | **复杂化学/特殊结构** | **工程务实 (Pragmatic)** | 遇到二维环状分子或复杂推导，若 LaTeX 表达失真，优先采用高保真原图局域裁切，确保科学真实性。 |
 
 ---
