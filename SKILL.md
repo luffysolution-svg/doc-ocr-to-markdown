@@ -62,12 +62,13 @@ OCR 会出现形近字、同音字或英文字母误识（如“轫致辐射”�
 
 - **去重**：按 SHA-256 / SHA-1 内容哈希去重，杜绝挂图讲解产生的重复资产。
 - **图内标签过滤**：文字块完全落在图片区域内（重叠度 > 0.6）且小于 12 字符的标签，丢弃不重复为正文。
-- **图块异常**：自动合并仅覆盖连续且重叠的碎片；并排子图、错挂/遗漏图题或裁框截断须回看原页，核对全部面板、尺寸线与标注后用 `--repairs` 修复。不因距离近自动合图，也不把单本教材的页码、尺寸或题注方向假设作为通用规则。
+- **图块异常与多面板重组**：使用 `python scripts/audit_figures.py <raw目录> [--manifest manifest.json] --out-repairs repairs-draft.json` 自动探测同页多面板图块并计算外接矩形（union bbox），生成修复草稿；经原页目视核实后，通过 `--repairs` 传入完成高清重裁合并与碎块消除。
 
 ### 步骤 4：科学公式严谨归一化
 
 所有公式转为 Obsidian 兼容的 LaTeX（行内 `$...$`，独立行 `$$...$$`）。核心规则（见 `references/math-normalization.md`）：
 - 中文放进 `\text{}`，化学式放进 `\mathrm{}`；
+- 数学不等号转义：公式中的 `<` 和 `>` 自动转义为 `\lt ` 与 `\gt `，杜绝 CommonMark/Obsidian 引擎将其误识别为 HTML 标签而破坏定界符；
 - 保留文本分组语义；有歧义的嵌套分组和标点回源确认后再修；
 - 修复粘连命令：`\vertHg` → `\vert Hg`，`\cdotkg` → `\cdot kg`；
 - 化学下标处于文本模式时，核对后用数学模式保留其下标，例如 `\text{NH_4Cl}` → `\mathrm{NH_4Cl}`；
@@ -87,9 +88,9 @@ python scripts/build_markdown.py --raw ./ocr-work/raw --out ./知识库 \
     --pdf <整本PDF路径> --keep-table-images
 ```
 
-- **自然流混排**：教材模式下正文、公式、表格、图表依照出现顺序连贯流转。
+- **自然流混排与几何排序**：教材模式下按页面垂直量化阶梯（$\Delta y = 25$）排列正文、图表与公式，杜绝 MinerU 偶发的“页底图排在 JSON 数组开头导致图被强行置顶”的倒错问题。
 - **段落边界**：保守保留 OCR 段落与跨页边界，避免误拼题目、公式及新段落。
-- **标题与保真**：区分小节和习题；拆分章名与传入标题一致时去重；实质脚注和整页图保留，不按 OCR 标签或面积静默丢弃。
+- **标题与习题精准消歧**：区分名词性小节编号（如 `1. 晶胞概念` 归入 H3）与指令性习题题干（如 `1. 计算这个数`、以 `。？！` 结句或位于习题区者保留为列表/正文），层级结构严谨；拆分章名与传入标题一致时去重；实质脚注和整页图保留，不按 OCR 标签或面积静默丢弃。
 - **干净交付**：默认只生成导航、正文 Markdown 和图片；构建状态位于输出旁的 `.<目录名>.build/`，可用 `--state-dir` 指定外部工作目录。
 - **可选检索**：仅当用户明确要求后续 Agent 检索、RAG 时添加 `--agent-index`，生成 `agent/` 分块与原页映射。
 - **回源修复**：`--repairs repairs.json` 接受 `[{"page":1,"bbox":[100,200,800,300],"field":"text","old":"原识别","new":"核对后的内容","reason":"原页核对依据"}]`；可附 `set_type:"body_text"` 强制正文或 `set_type:"page_footnote"` 保留脚注，`text` 则仍参与标题判定。补原图使用 `action:"add_image"`、裁切 `bbox` 和 `after:{"bbox":[...],"text":"原始锚点"}`。旧值或定位不匹配立即停止，审计留在外部构建状态。
@@ -109,7 +110,7 @@ python scripts/extract_formulas.py ./知识库 --out formulas.json
 node scripts/validate_math.cjs formulas.json
 ```
 
-检查围栏未闭合错误与图片遮蔽警告；合法图片语法示例须标注代码语言（如 `markdown`）。源图片候选数、解析图片数与有效引用数含义不同，不能直接要求相等。未引用资产会列出路径，默认保留；重建可用新目录核验，不清空已有知识库。
+检查围栏未闭合错误与图片遮蔽警告；合法图片语法示例须标注代码语言（如 `markdown`）。校验器会自动遮蔽公式区域，避免将化学式等配位方括号误报为链接失效。源图片候选数、解析图片数与有效引用数含义不同，不能直接要求相等。未引用资产会列出路径，默认保留；重建可用新目录核验，不清空已有知识库。
 
 ### 步骤 7：浏览器实际渲染沙箱验收
 
@@ -119,6 +120,7 @@ node scripts/validate_math.cjs formulas.json
 python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/node_modules/katex/dist
 ```
 - 打开 `http://127.0.0.1:8766/` 验证 `document.documentElement.dataset.ready === "true"` 且 `.math-error` 数量为 0；检查各章实际图片数量与加载状态。加载成功只证明文件可显示，异常图仍须逐幅对照原页确认面板、题注和裁框完整。
+- **Obsidian 客户端兼容提示**：在瞬间批量写入数百张新插图时，Obsidian 后台文件监视器（File Watcher）可能存在索引延迟，偶见“找不到图片”占位提示。重启 Obsidian 即可触发全库索引扫描并正常渲染。
 
 ---
 
@@ -141,6 +143,7 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 4. ❌ **公式抽查交付**：认为抽查几页没报错即合格；数千个公式中哪怕 1 个语法错都会导致 Obsidian/前端整块崩溃。
 5. ❌ **丢弃表格内嵌图片**：提取表格时使用纯文本截断，导致关键二维码、实验图标全部遗失。
 6. ❌ **残留模型提示词**：把 OCR 模型的“The Ground Truth image displays...”等幻觉说明写入知识库。
+7. ❌ **盲信 OCR 块原始顺序**：忽略扫描排版与 OCR 提取序列的不一致，长篇教材必须由几何自然流混排，严禁将底部插图置于页首。
 
 ---
 

@@ -662,6 +662,40 @@ class BuildTests(unittest.TestCase):
         self.cli('--pdf', str(self.base / 'source.pdf'), ok=False)
         self.assertFalse(self.out.exists())
 
+    def test_in_page_geometric_order_sorting_restores_natural_flow(self):
+        # Even if MinerU outputs the bottom figure first in the JSON array,
+        # book mode sorts by vertical band so top prose appears first.
+        ocr = self.part('part01', [])
+        items = [
+            block('image', bbox=[100, 600, 900, 900], img_path='images/same.png', image_caption=['图1 底部插图']),
+            block(text='顶部先行正文', bbox=[100, 100, 900, 200]),
+            block(text='底部后续正文', bbox=[100, 920, 900, 980]),
+        ]
+        text, _ = self.render(items, ocr_dir=ocr)
+        top_pos = text.index('顶部先行正文')
+        fig_pos = text.index('图1 底部插图')
+        bot_pos = text.index('底部后续正文')
+        self.assertLess(top_pos, fig_pos)
+        self.assertLess(fig_pos, bot_pos)
+
+    def test_single_number_subheading_distinguished_from_exercise(self):
+        items = [
+            block(text='1.1 正规小节', text_level=1),
+            block(text='1. 链结构单元的化学组成', text_level=1),
+            block(text='正文描述'),
+            block(text='1. 计算这个数', text_level=1),
+            block(text='复习题'),
+            block(text='2. 晶格常数分析', text_level=1),
+        ]
+        text, _ = self.render(items)
+        self.assertIn('## 1.1 正规小节', text)
+        self.assertIn('### 1. 链结构单元的化学组成', text)
+        self.assertIn('\n1. 计算这个数\n', text)
+        self.assertNotIn('### 1. 计算这个数', text)
+        # Inside exercise section, even noun headings remain list items
+        self.assertIn('\n2. 晶格常数分析\n', text)
+        self.assertNotIn('### 2. 晶格常数分析', text)
+
     def test_missing_nested_asset_and_fragment_fallback_fail(self):
         ocr = self.part('part01', [])
         with self.assertRaisesRegex(ValueError, '内嵌图片'):

@@ -364,7 +364,27 @@ def image_groups(items: list[dict]) -> dict[int, list[dict]]:
 
 SPECIAL_HEADINGS = {'本章基本要求', '拓展学习资源', '复习题', '习题', '附录'}
 EXERCISE = re.compile(r'^(?:[（(](?:\d+|[一二三四五六七八九十]+)[）)]|[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.．、)）](?!\d))')
+EXERCISE_ACTION = re.compile(
+    r'^\s*(?:[（(]?\d+[)）.]?\s*|[①②③④⑤⑥⑦⑧⑨⑩]\s*)'
+    r'(?:计算|求解|试述|简述|证明|分析|说明|求出|判断|指出|讨论|解释|已知|设|若|试问|写出|画出|回答|选择|填空|简答|如图)'
+)
 SECTION = re.compile(r'^(?:★\s*)?\d+(?:\.\d+)+\s+\S')
+
+
+def _sort_page_items(items: list[dict]) -> list[dict]:
+    """Sort page items by vertical geometric reading flow.
+
+    Quantizes y0 into 25-point vertical bands (~2.5% of page); within the
+    same band, preserves original relative sequence so adjacent image panels
+    and inline captions remain clustered.
+    """
+    return [it for _, it in sorted(
+        enumerate(items),
+        key=lambda pair: (
+            int(((pair[1].get('bbox') or [0, 0, 0, 0])[1]) / 25),
+            pair[0]
+        )
+    )]
 
 
 def heading_text(text: str) -> str:
@@ -468,12 +488,12 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
     have_section = False
     previous_level = 1
     code_blocks = set()
-    all_items = [item for pi in sorted(by_page) for item in by_page[pi]]
+    all_items = [item for pi in sorted(by_page) for item in (_sort_page_items(by_page[pi]) if mode == 'book' else by_page[pi])]
     title_parts = {id(all_items[i]) for i in chapter_title_parts(all_items, title)} if mode == 'book' else set()
     marginal_counts = Counter(nkey(item.get('text', '')) for item in all_items
                               if item.get('type') in ('header', 'footer'))
     for pi in sorted(by_page):
-        page_items = by_page[pi]
+        page_items = _sort_page_items(by_page[pi]) if mode == 'book' else by_page[pi]
         actual_pi = pi + page_offset
         source = source_pages[pi] if source_pages and pi < len(source_pages) else None
         used_text: set[int] = set()
@@ -589,9 +609,11 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                     elif is_chapter_title or disp == '附录':
                         in_exercises = False
                     sec_match = SECTION.match(disp) if not in_exercises and not re.search(r'[。！？?!]', text) else None
-                    exercise = bool(EXERCISE.match(text)) or (in_exercises and bool(re.match(r'^\d+\.\d+\b', text)))
+                    is_action_exercise = bool(EXERCISE_ACTION.search(text))
                     trusted_title = (bool(item.get('text_level')) and len(text) < 80
-                                     and not re.search(r'[。？！?！]', text) and not in_exercises)
+                                     and not re.search(r'[。？！?！:：]', text) and not in_exercises
+                                     and not is_action_exercise)
+                    exercise = (bool(EXERCISE.match(text)) and not trusted_title) or (in_exercises and bool(re.match(r'^\d+\.\d+\b', text)))
                     is_heading = not exercise and (trusted_title or (sec_match and len(text) < 65)
                                                    or is_chapter_title or is_special_heading)
                 else:

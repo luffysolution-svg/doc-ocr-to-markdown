@@ -295,6 +295,14 @@ def normalize_math(text: str) -> str:
                 out.append('{\\' + name + '{' + normalize_math(text[pos + scoped.end():end - 1]) + '}}')
                 pos = end
                 continue
+        if text[pos] == '<' and not escaped(text, pos):
+            out.append(r'\lt' if pos + 1 < len(text) and text[pos + 1].isspace() else r'\lt ')
+            pos += 1
+            continue
+        if text[pos] == '>' and not escaped(text, pos):
+            out.append(r'\gt' if pos + 1 < len(text) and text[pos + 1].isspace() else r'\gt ')
+            pos += 1
+            continue
         out.append(text[pos])
         pos += 1
     return ''.join(out)

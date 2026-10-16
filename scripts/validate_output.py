@@ -103,7 +103,15 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
     source_candidates = len(re.findall(r'(?<!\\)!\[[^\]\n]*\]\([^\)\n]*\)', text))
     if MarkdownIt is not None:
         parser = MarkdownIt('commonmark', {'html': True}).enable('table')
-        for token in parser.parse(text):
+        text_for_parsing = text
+        if math_spans:
+            chars = list(text)
+            for span in math_spans:
+                for idx in range(span.start(), span.end()):
+                    if chars[idx] not in '\r\n':
+                        chars[idx] = ' '
+            text_for_parsing = ''.join(chars)
+        for token in parser.parse(text_for_parsing):
             if token.type == 'fence' and token.map:
                 start, end = token.map
                 # A closed fence spans its content plus opening and closing lines,

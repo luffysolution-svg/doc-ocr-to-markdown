@@ -77,6 +77,13 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(r['detail'][0]['source_image_candidates'], 2)
         self.assertEqual(r['detail'][0]['parsed_images'], 1)
 
+    def test_math_bracket_not_mistaken_for_markdown_link(self):
+        self.note('# Note\n\n![a](images/a.png)\n\n'
+                  r'$\mathrm{Al}_{4}\left[\mathrm{Si}_{4}\mathrm{O}_{10}\right](\mathrm{OH})_{8}$' + '\n')
+        r = self.report()
+        self.assertEqual(r['status'], 'pass', r)
+        self.assertEqual(r['errors'], [])
+
     def test_closed_fences_in_containers_are_allowed(self):
         self.note('# Note\n\n> ```markdown\n> ![example](missing.png)\n> ```\n\n![a](images/a.png)\n')
         r = self.report()

@@ -93,3 +93,7 @@ MinerU 在遇到跨页连续大表时（如活度因子表、标准电极电势�
 ### 3.4 复杂科学大表与环状化学式双轨保真
 * **复杂大表**：Markdown 纯文本表格方便全文搜索与 LLM 提取，但深层合并单元格和密集上下标可能失真。开启 `--keep-table-images` 会同步截取原版扫描图裁片，供科学计算复核。
 * **化学环状键**：对于三角形、多边形等复杂空间结构，严禁使用 `\backslash` 乱拼字符，一律降级为局域原图裁切嵌入。
+
+### 3.5 多面板碎图自动化审查与合并 (`audit_figures.py`)
+教材中一个图号常包含多个并排子图（如布拉维点阵 14 种晶胞、多状态相图曲线）。OCR 往往将其切为十几个孤立碎块，丢失 (a)(b) 标签关联。
+* **对策**：使用 `python scripts/audit_figures.py <ocr-work目录> --manifest manifest.json --out-repairs repairs-draft.json` 自动探测同页多面板并计算 union bbox，经原页核验后通过 `build_markdown.py --repairs repairs.json` 一键应用高保真重裁。

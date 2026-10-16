@@ -47,6 +47,13 @@ class MathTests(unittest.TestCase):
             self.assertEqual(normalize_math(source), source)
         self.assertEqual(math_issues(r'\text{literal ( [ $a$} + \left. x \right)'), [])
 
+    def test_inequality_normalization_for_markdown_safety(self):
+        self.assertEqual(normalize_math(r'x < y'), r'x \lt y')
+        self.assertEqual(normalize_math(r'x > y'), r'x \gt y')
+        self.assertEqual(normalize_math(r'0<x<1'), r'0\lt x\lt 1')
+        self.assertEqual(normalize_math(r'\Omega > 0'), r'\Omega \gt 0')
+        self.assertEqual(normalize_math(r'\text{a < b} + x < y'), r'\text{a < b} + x \lt y')
+
     def test_visible_brackets_can_span_latex_text_groups(self):
         for body in [r'[\text{Au(NO}_{3})_{3}]',
                      r'\text{KOH(质量分数} w=0.22)', r'\text{literal (}']:
