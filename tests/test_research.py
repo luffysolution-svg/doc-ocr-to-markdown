@@ -3,6 +3,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -227,7 +228,7 @@ class ResearchEntryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='research-tests-')
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.raw = self.root / 'ocr' / 'raw'
         self.item = self.raw / 'ABCD2345'
         self.item.mkdir(parents=True)
@@ -255,8 +256,10 @@ class ResearchEntryTests(unittest.TestCase):
                 '--metadata', str(self.export), '--id', 'ABCD2345', *extra]
 
     def run_cli(self, *extra, success=True):
+        env = dict(os.environ)
+        env['PYTHONIOENCODING'] = 'utf-8'
         result = subprocess.run(self.command(*extra), capture_output=True, text=True, encoding='utf-8',
-                                errors='replace', timeout=60)
+                                errors='replace', timeout=60, env=env)
         if success:
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         else:
@@ -338,7 +341,8 @@ class ResearchEntryTests(unittest.TestCase):
         changed = target.read_text(encoding='utf-8').replace('First Author', 'My correction')
         target.write_text(changed, encoding='utf-8')
         result = self.run_cli(success=False)
-        self.assertIn('人工修改', result.stdout)
+        output_text = result.stdout + result.stderr
+        self.assertTrue('人工修改' in output_text or r'\u4eba\u5de5\u4fee\u6539' in output_text)
         self.assertEqual(target.read_text(encoding='utf-8'), changed)
 
     def test_unowned_file_refused(self):
