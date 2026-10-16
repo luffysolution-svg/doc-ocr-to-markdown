@@ -392,16 +392,55 @@ def heading_text(text: str) -> str:
     return plain_text(text).strip()
 
 
+def _cn_or_arabic_to_int(s: str) -> int | None:
+    if not s:
+        return None
+    if s.isdigit():
+        return int(s)
+    mapping = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
+    if s in mapping:
+        return mapping[s]
+    if len(s) == 2 and s[0] == '十' and s[1] in mapping:
+        return 10 + mapping[s[1]]
+    if len(s) == 2 and s[0] in mapping and s[1] == '十':
+        return mapping[s[0]] * 10
+    if len(s) == 3 and s[0] in mapping and s[1] == '十' and s[2] in mapping:
+        return mapping[s[0]] * 10 + mapping[s[2]]
+    return None
+
+
+def _parse_chapter_prefix(s: str) -> tuple[int | None, str]:
+    s = s.strip()
+    m = re.match(r'^(?:第\s*([0-9一二三四五六七八九十百]+)\s*章|\s*([0-9]+))\s*[.、\s\-:]*\s*(.*)$', s)
+    if m:
+        num_str = m.group(1) or m.group(2)
+        val = _cn_or_arabic_to_int(num_str)
+        name = m.group(3).strip()
+        return val, name
+    return None, s
+
+
+def is_chapter_title_match(heading: str, title: str) -> bool:
+    """Check if a heading matches the chapter title, allowing for chapter prefix variations."""
+    if nkey(heading) == nkey(title):
+        return True
+    n1, name1 = _parse_chapter_prefix(title)
+    n2, name2 = _parse_chapter_prefix(heading)
+    if n1 is not None and n1 == n2 and nkey(name1) and nkey(name1) == nkey(name2):
+        return True
+    return False
+
+
 def chapter_title_parts(items: list[dict], title: str) -> set[int]:
     """Only suppress split chapter labels when they reproduce the supplied title."""
     candidates = [(index, item) for index, item in enumerate(items)
                   if item.get('type') == 'text' and item.get('text', '').strip()]
     for pos, (index, item) in enumerate(candidates[:6]):
         text = item['text'].strip()
-        if not re.fullmatch(r'第[一二三四五六七八九十百\d]+章', text):
+        if not (re.fullmatch(r'第[一二三四五六七八九十百\d]+章', text) or re.fullmatch(r'\d+', text)):
             continue
         combined, matched = text, {index}
-        if nkey(combined) == nkey(title):
+        if is_chapter_title_match(combined, title):
             return matched
         for other_index, other in candidates[pos + 1:pos + 3]:
             if other.get('page_idx', 0) != item.get('page_idx', 0):
@@ -411,7 +450,7 @@ def chapter_title_parts(items: list[dict], title: str) -> set[int]:
                 break
             combined += value
             matched.add(other_index)
-            if nkey(combined.rstrip('①②③④⑤⑥⑦⑧⑨⑩')) == nkey(title):
+            if is_chapter_title_match(combined.rstrip('①②③④⑤⑥⑦⑧⑨⑩'), title):
                 return matched
     return set()
 
@@ -620,7 +659,7 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                     is_heading = bool(item.get('text_level')) or (box_of(item)[1] < 0.152 and len(text) < 100 and '$' not in text)
 
                 if is_heading:
-                    if nkey(text) == nkey(title):
+                    if is_chapter_title_match(text, title):
                         continue
                     identity = nkey(text)
                     if identity == last_heading and identity in headings:

@@ -107,6 +107,8 @@ class MathTests(unittest.TestCase):
         self.assertEqual(process('正文（$x)$。'), '正文（$x$）。')
         self.assertEqual(process(r'直链 $(\mathrm{H}_2$ 和 $Cl_2$ 反应）'),
                          r'直链 ($\mathrm{H}_2$ 和 $Cl_2$ 反应）')
+        self.assertEqual(process(r'范围在 $(1800\mathrm{cm}^{-1}$ 和 $1928\mathrm{cm}^{-1})$ 之间'),
+                         r'范围在 ($1800\mathrm{cm}^{-1}$ 和 $1928\mathrm{cm}^{-1}$) 之间')
         source = r'$\text{和像差（主要是球差} x^3) 。$'
         self.assertEqual(process(source), '和像差（主要是球差$x^3$）。')
         self.assertEqual(process(process(source)), process(source))

@@ -96,6 +96,7 @@ python scripts/build_markdown.py --raw ./ocr-work/raw --out ./知识库 \
 - **回源修复**：`--repairs repairs.json` 接受 `[{"page":1,"bbox":[100,200,800,300],"field":"text","old":"原识别","new":"核对后的内容","reason":"原页核对依据"}]`；可附 `set_type:"body_text"` 强制正文或 `set_type:"page_footnote"` 保留脚注，`text` 则仍参与标题判定。补原图使用 `action:"add_image"`、裁切 `bbox` 和 `after:{"bbox":[...],"text":"原始锚点"}`。旧值或定位不匹配立即停止，审计留在外部构建状态。
 - **图块修复**：`action:"update_image"` 用原 `page+bbox` 和完整 `old` 图块快照核对后，原子修改 `new_bbox`、`image_caption` / `image_footnote`；`add_image` 也支持题注，配合 `skip` 处理确认后的合图、拆图。新增或改框必须从原 PDF 重裁，修复图块不再自动合并。格式及 chart 字段规则按需读取 `references/mineru-api.md` 的“回源修复图块”。
 - **过滤模型泄漏**：自动清除 `The Ground Truth...` 等模型推理遗留文本。
+- **扫描件物理边缘噪声排查与清洗**：扫描教材在章节首尾页、装订中缝或页面边缘常残留物理伪影（如防伪印章、条形码乱码、借书章残印、边缘阴影，例如“用应从请勿填清文件中？”等无意义伪字符）。排查时核验章节起始首三行及页边极值位置，通过 `--repairs` 配置 `{"field":"text","old":"...","new":"","reason":"扫描边缘物理印章/条形码伪影"}` 精准清空剔除，严禁让扫描杂质污染章首标题与正式引言。
 
 ### 步骤 6：交付前全量校验（核心质量门禁）
 

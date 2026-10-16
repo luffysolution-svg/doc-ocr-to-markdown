@@ -345,15 +345,29 @@ def fix_inline_parens(text: str) -> str:
         skeleton = _math_skeleton(body)
         visible = _math_skeleton(body, include_text=True)
         text_brackets = any(skeleton.count(c) != visible.count(c) for c in '()[]')
+        line_so_far = ''.join(out).rsplit('\n', 1)[-1] + prose
         if not span.display and skeleton and not text_brackets:
             for opening, closing, full_open, full_close in [('(', ')', '（', '）'), ('[', ']', '［', '］')]:
                 if body.endswith(closing) and skeleton.count(closing) == skeleton.count(opening) + 1:
-                    if prose.rstrip().endswith((opening, full_open)) and closing not in skeleton[:-1]:
-                        suffix = full_close if prose.rstrip().endswith(full_open) else closing
+                    unmatched_full = line_so_far.count(full_open) > line_so_far.count(full_close)
+                    unmatched_ascii = line_so_far.count(opening) > line_so_far.count(closing)
+                    if (prose.rstrip().endswith((opening, full_open)) or unmatched_full or unmatched_ascii) and closing not in skeleton[:-1]:
+                        suffix = full_close if (prose.rstrip().endswith(full_open) or unmatched_full) else closing
                         body = body[:-1].rstrip()
                         break
                 if body.startswith(opening) and skeleton.count(opening) == skeleton.count(closing) + 1:
-                    if re.match(r'[^$\n`]*?' + re.escape(closing) + '|' + r'[^$\n`]*?' + re.escape(full_close), after):
+                    has_mate = bool(re.match(r'[^$\n`]*?' + re.escape(closing) + '|' + r'[^$\n`]*?' + re.escape(full_close), after))
+                    if not has_mate:
+                        line_tail = text[span.end():].split('\n', 1)[0].split('`', 1)[0]
+                        for other_span in spans[index + 1:]:
+                            if other_span.start() > span.end() + len(line_tail):
+                                break
+                            if not other_span.display:
+                                other_sk = _math_skeleton(other_span.body)
+                                if other_span.body.endswith(closing) and other_sk.count(closing) == other_sk.count(opening) + 1:
+                                    has_mate = True
+                                    break
+                    if has_mate:
                         prefix, body = opening, body[1:].lstrip()
                         break
         close = {r'\(': r'\)', r'\[': r'\]'}.get(span.delimiter, span.delimiter)

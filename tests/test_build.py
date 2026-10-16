@@ -97,8 +97,9 @@ class BuildTests(unittest.TestCase):
         return re.findall(r'!\[[^\]]*\]\(([^)]+)\)', text)
 
     def render(self, items, **kwargs):
+        title = kwargs.pop('title', '传入标题')
         return build.build_chapter(items, None, kwargs.pop('pdf_path', None),
-                                   self.base / 'render' / 'images' / 'ch', '传入标题', [],
+                                   self.base / 'render' / 'images' / 'ch', title, [],
                                    mode='book', **kwargs)
 
     def snapshot(self):
@@ -707,6 +708,16 @@ class BuildTests(unittest.TestCase):
     def test_process_repairs_inline_boundary_without_moving_prose(self):
         text, _ = self.render([block(text='正文（$x)$。')])
         self.assertIn('正文（$x$）。', text)
+
+    def test_chapter_title_prefix_match_and_deduplication(self):
+        items = [
+            block(text='1 绪论', text_level=1),
+            block(text='1.1 材料结构基础', text_level=2),
+            block(text='正文描述'),
+        ]
+        text, _ = self.render(items, title='第1章 绪论')
+        self.assertNotIn('## 1 绪论', text)
+        self.assertIn('## 1.1 材料结构基础', text)
 
     def test_output_and_asset_symlinks_rejected_when_supported(self):
         outside = self.base / 'outside'
