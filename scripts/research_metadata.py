@@ -134,6 +134,8 @@ def metadata_from_export(payload: dict) -> dict:
             authors.append(name)
     if authors:
         result['authors'] = authors
+    elif data.get('authors') and isinstance(data['authors'], list):
+        result['authors'] = [str(a).strip() for a in data['authors'] if str(a).strip()]
     # Zotero tags can be personal/automatic labels, not original article keywords.
     # Keep them as external provenance instead of relabeling them in frontmatter.
     # Build IDs may include an attachment suffix. Zotero selection always points
@@ -343,49 +345,106 @@ def sanitize_filename_title(title: str, max_length: int = 100) -> str:
     return t
 
 
-def format_zotero_basename(metadata: dict | None, fallback_stem: str = '') -> str:
+def format_zotero_basename(metadata: dict | None = None, fallback_stem: str = '',
+                           extra_candidates: dict | None = None) -> str:
     """Format file/folder basename following Zotero pattern:
     {{ firstCreator suffix=" - " }}{{ year suffix=" - " }}{{ title truncate="100" }}
-    Supports canonical metadata dict, Zotero payload/item/data wrapper, or empty dict.
+    Supports canonical metadata dict, Zotero payload/item/data wrapper, independent PDF/Word candidates, or empty dict.
     """
-    if not isinstance(metadata, dict):
-        return fallback_stem or 'document'
-    data = metadata.get('metadata', metadata)
-    if isinstance(data, dict):
-        data = data.get('data', data)
-    if not isinstance(data, dict):
-        data = metadata
-
-    creators = data.get('creators') or data.get('authors') or metadata.get('authors') or []
     first_creator = ''
-    if creators and isinstance(creators, list):
-        first = creators[0]
-        multi = len(creators) > 1
-        if isinstance(first, dict):
-            name = first.get('lastName') or first.get('name') or first.get('firstName') or ''
-        elif isinstance(first, str):
-            s = first.strip()
-            if ',' in s:
-                name = s.split(',')[0].strip()
-            elif re.search(r'[\u4e00-\u9fff]', s):
-                name = s
+    year = ''
+    raw_title = ''
+
+    if isinstance(metadata, dict):
+        data = metadata.get('metadata', metadata)
+        if isinstance(data, dict):
+            data = data.get('data', data)
+        if not isinstance(data, dict):
+            data = metadata
+
+        creators = data.get('creators') or data.get('authors') or metadata.get('authors') or []
+        if creators and isinstance(creators, list):
+            first = creators[0]
+            multi = len(creators) > 1
+            if isinstance(first, dict):
+                name = first.get('lastName') or first.get('name') or first.get('firstName') or ''
+            elif isinstance(first, str):
+                s = first.strip()
+                if ',' in s:
+                    name = s.split(',')[0].strip()
+                elif re.search(r'[\u4e00-\u9fff]', s):
+                    name = s
+                else:
+                    parts = s.split()
+                    name = parts[-1] if parts else s
             else:
-                parts = s.split()
-                name = parts[-1] if parts else s
-        else:
-            name = str(first).strip()
-        name = name.strip()
-        if name:
-            first_creator = f'{name} 等' if multi else name
+                name = str(first).strip()
+            name = name.strip()
+            if name:
+                first_creator = f'{name} 等' if multi else name
 
-    date_str = str(data.get('date') or metadata.get('date') or '')
-    m_year = re.search(r'\b(19\d\d|20\d\d)\b', date_str)
-    year = m_year.group(1) if m_year else ''
+        date_str = str(data.get('date') or metadata.get('date') or '')
+        m_year = re.search(r'(?:19|20)\d{2}', date_str)
+        if m_year:
+            year = m_year.group(0)
 
-    raw_title = data.get('title') or metadata.get('title') or ''
+        raw_title = data.get('title') or metadata.get('title') or ''
+
+    # Handle independent PDF / Word properties or extra candidates if fields are missing
+    if extra_candidates and isinstance(extra_candidates, dict):
+        if not first_creator and extra_candidates.get('author'):
+            author_str = str(extra_candidates['author']).strip()
+            if ';' in author_str:
+                first_raw = author_str.split(';')[0].strip()
+                multi = True
+            elif ',' in author_str and not re.search(r'^[A-Z][a-z]+,\s*[A-Z]', author_str):
+                first_raw = author_str.split(',')[0].strip()
+                multi = True
+            else:
+                first_raw = author_str
+                multi = False
+            if re.search(r'[\u4e00-\u9fff]', first_raw):
+                name = first_raw
+            elif ',' in first_raw:
+                name = first_raw.split(',')[0].strip()
+            else:
+                parts = first_raw.split()
+                name = parts[-1] if parts else first_raw
+            if name:
+                first_creator = f'{name} 等' if multi else name
+
+        if not year:
+            date_cand = str(extra_candidates.get('creationDate') or extra_candidates.get('modDate') or extra_candidates.get('date') or '')
+            m_year = re.search(r'(?:19|20)\d{2}', date_cand)
+            if m_year:
+                year = m_year.group(0)
+
+        if not raw_title and extra_candidates.get('title'):
+            raw_title = str(extra_candidates['title']).strip()
+
+    # If first_creator, year, or title are still missing, attempt pattern matching from fallback_stem
+    stem_str = fallback_stem.strip()
+    if stem_str:
+        stem_match = re.search(r'^(?P<author>[^-_\n]+?)\s*[-_–—]\s*(?P<year>19\d\d|20\d\d)\s*[-_–—]\s*(?P<title>.+)$', stem_str)
+        if stem_match:
+            stem_author = stem_match.group('author').strip()
+            stem_year = stem_match.group('year').strip()
+            stem_title = stem_match.group('title').strip()
+            if not first_creator and stem_author:
+                if re.search(r'\bet\s+al\.?|\bet\s+al\b|等\s*$', stem_author, re.I):
+                    clean_author = re.sub(r'\s*(?:et\s+al\.?|等)\s*$', '', stem_author, flags=re.I).strip()
+                    first_creator = f'{clean_author} 等' if clean_author else stem_author
+                else:
+                    first_creator = stem_author
+            if not year and stem_year:
+                year = stem_year
+            if not raw_title and stem_title:
+                raw_title = stem_title
+        elif not raw_title:
+            raw_title = stem_str
+
     title = sanitize_filename_title(raw_title, max_length=100) if raw_title else ''
-
     parts = [p for p in (first_creator, year, title) if p]
     if not parts:
-        return fallback_stem or 'document'
+        return sanitize_filename_title(fallback_stem or 'document', max_length=100)
     return ' - '.join(parts)

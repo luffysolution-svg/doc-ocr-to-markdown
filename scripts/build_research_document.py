@@ -115,11 +115,10 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
         provenance['review'].append('Navigation/H1 uses source filename only; not asserted as publication title')
     if getattr(args, 'file', None):
         target_file = args.file if args.file.endswith('.md') else f'{args.file}.md'
-    elif getattr(args, 'naming', 'classic') == 'zotero':
-        from research_metadata import format_zotero_basename
-        target_file = f'{format_zotero_basename(fields, pdf.stem)}.md'
     else:
-        target_file = '原文.md'
+        from research_metadata import format_zotero_basename
+        extra_cand = preflight.get('pdf_properties') if isinstance(preflight.get('pdf_properties'), dict) else {}
+        target_file = f'{format_zotero_basename(fields, pdf.stem, extra_candidates=extra_cand)}.md'
     manifest = {'source': str(pdf), 'pages': preflight['page_count'], 'parts': [
         {'id': part_id, 'start_page': 1, 'end_page': preflight['page_count']}]}
     chapters = [{'id': identity, 'title': title, 'file': target_file,
@@ -196,10 +195,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--pdf', required=True, help='User-provided local source PDF')
     parser.add_argument('--raw', required=True, help='Single item dir, raw root, or workspace containing raw/')
     parser.add_argument('--metadata', help='Canonical object, Zotero item/data wrapper, or exported library JSON list')
-    parser.add_argument('--out', required=True, help='Delivery directory for ONE PDF; contains Markdown document')
-    parser.add_argument('--file', help='Output Markdown filename inside --out (default: 原文.md or zotero pattern when --naming zotero)')
-    parser.add_argument('--naming', choices=['classic', 'zotero'], default='classic',
-                        help='Naming style for chapter markdown: classic uses 原文.md, zotero uses {{firstCreator}} - {{year}} - {{title}}')
+    parser.add_argument('--out', required=True, help='Delivery directory for ONE PDF; contains academic Markdown document')
+    parser.add_argument('--file', help='Explicit Markdown filename inside --out (default: academic {{firstCreator}} - {{year}} - {{title}}.md)')
+    parser.add_argument('--naming', choices=['zotero', 'classic'], default='zotero',
+                        help='Naming style (default: zotero pattern; standard academic naming)')
     parser.add_argument('--state-dir', help='External state directory (default sibling .<out-name>.build)')
     parser.add_argument('--repairs', help='Source-verified repairs forwarded unchanged to core')
     parser.add_argument('--id', help='Stable document ID; required for ambiguous multi-item metadata/OCR roots')

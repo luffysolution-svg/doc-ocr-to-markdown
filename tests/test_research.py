@@ -278,7 +278,9 @@ class ResearchEntryTests(unittest.TestCase):
 
     def test_real_cli_frontmatter_order_cache_and_no_formula_gate(self):
         self.run_cli()
-        text = (self.out / '原文.md').read_text(encoding='utf-8')
+        expected_file = self.out / 'Author 等 - Research about material discovery.md'
+        self.assertTrue(expected_file.is_file(), f'Expected {expected_file} to exist')
+        text = expected_file.read_text(encoding='utf-8')
         front = yaml.safe_load(text.split('---\n', 2)[1])
         self.assertEqual(front['authors'], ['First Author', 'Research Group'])
         self.assertEqual(front['abstract'], 'Original abstract: exact text\n第二行')
@@ -313,7 +315,9 @@ class ResearchEntryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         report = json.loads((self.state / 'research/research-report.json').read_text(encoding='utf-8'))
         self.assertEqual(report['id'], identity)
-        front = yaml.safe_load((self.out / '原文.md').read_text(encoding='utf-8').split('---\n', 2)[1])
+        target = self.out / 'Author - Research about material discovery.md'
+        self.assertTrue(target.is_file(), f'Expected {target} to exist')
+        front = yaml.safe_load(target.read_text(encoding='utf-8').split('---\n', 2)[1])
         self.assertEqual(front['zotero_item_uri'], 'zotero://select/library/items/ABCD2345')
         # Canonical metadata without any ID leaves build identity to the raw dir.
         self.export.write_text(json.dumps({'title': 'Research about material discovery'}), encoding='utf-8')
@@ -324,12 +328,13 @@ class ResearchEntryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         report = json.loads((self.state / 'research/research-report.json').read_text(encoding='utf-8'))
         self.assertEqual(report['id'], identity)
+        self.assertTrue((self.out / 'Research about material discovery.md').is_file())
 
     def test_owned_user_edit_refused_including_frontmatter_before_hash_finalization(self):
         self.run_cli()
-        target = self.out / '原文.md'
+        target = self.out / 'Author 等 - Research about material discovery.md'
         ledger = json.loads((self.state / '.build-ownership.json').read_text(encoding='utf-8'))
-        self.assertEqual(ledger['files']['原文.md'], metadata.sha256_file(target))
+        self.assertEqual(ledger['files'][target.name], metadata.sha256_file(target))
         changed = target.read_text(encoding='utf-8').replace('First Author', 'My correction')
         target.write_text(changed, encoding='utf-8')
         result = self.run_cli(success=False)
@@ -338,7 +343,7 @@ class ResearchEntryTests(unittest.TestCase):
 
     def test_unowned_file_refused(self):
         self.out.mkdir()
-        target = self.out / '原文.md'
+        target = self.out / 'Author 等 - Research about material discovery.md'
         target.write_text('User original note', encoding='utf-8')
         self.run_cli(success=False)
         self.assertEqual(target.read_text(encoding='utf-8'), 'User original note')
@@ -349,7 +354,8 @@ class ResearchEntryTests(unittest.TestCase):
         repairs.write_text(json.dumps([{'page': 1, 'bbox': [10, 700, 400, 750], 'field': 'text',
             'old': 'First source column', 'new': 'Verified source correction', 'reason': 'Checked source page'}]), encoding='utf-8')
         self.run_cli('--repairs', str(repairs))
-        self.assertIn('Verified source correction', (self.out / '原文.md').read_text(encoding='utf-8'))
+        target = self.out / 'Author 等 - Research about material discovery.md'
+        self.assertIn('Verified source correction', target.read_text(encoding='utf-8'))
         self.assertEqual(self.content.read_bytes(), original)
 
     def test_validation_failure_recorded_and_not_claimed_pass(self):
@@ -389,15 +395,38 @@ class ResearchEntryTests(unittest.TestCase):
         formatted = metadata.format_zotero_basename(long_title)
         self.assertEqual(formatted, f'Author - 2020 - {"A" * 100}')
 
+        # 4. Independent PDF / Word document: extract from structured filename
+        stem_en = 'Vaswani et al - 2017 - Attention Is All You Need'
+        self.assertEqual(metadata.format_zotero_basename(None, stem_en), 'Vaswani 等 - 2017 - Attention Is All You Need')
+
+        stem_zh = '李四 等 - 2023 - 凝聚态计算物理导论'
+        self.assertEqual(metadata.format_zotero_basename({}, stem_zh), '李四 等 - 2023 - 凝聚态计算物理导论')
+
+        stem_single = 'Goodfellow - 2016 - Deep Learning'
+        self.assertEqual(metadata.format_zotero_basename(None, stem_single), 'Goodfellow - 2016 - Deep Learning')
+
+        # 5. Independent document: extract from extra_candidates (properties from PDF/Word)
+        candidates = {
+            'author': 'Alice Smith; Bob Jones',
+            'creationDate': 'D:20240315102030',
+            'title': 'AI in Materials Science'
+        }
+        self.assertEqual(metadata.format_zotero_basename({}, 'paper_export', extra_candidates=candidates),
+                         'Smith 等 - 2024 - AI in Materials Science')
+
+        # 6. Independent plain title fallback without author or year
+        self.assertEqual(metadata.format_zotero_basename({}, 'Annual Research Review Report'),
+                         'Annual Research Review Report')
+
     def test_build_cli_supports_zotero_naming_and_explicit_file(self):
-        # Build with --naming zotero
+        # Build with default academic naming (without needing --naming)
         meta_file = self.root / 'meta.json'
         meta_file.write_text(json.dumps({
             'title': 'Research about material discovery',
             'authors': ['Alice Smith', 'Bob Jones'],
             'date': '2025-02-15'
         }), encoding='utf-8')
-        self.run_cli('--metadata', str(meta_file), '--naming', 'zotero')
+        self.run_cli('--metadata', str(meta_file))
         expected_name = 'Smith 等 - 2025 - Research about material discovery.md'
         target = self.out / expected_name
         self.assertTrue(target.is_file(), f'Expected {target} to exist')
@@ -405,6 +434,20 @@ class ResearchEntryTests(unittest.TestCase):
         nav = (self.out / '00-目录.md').read_text(encoding='utf-8')
         import urllib.parse
         self.assertIn(expected_name, urllib.parse.unquote(nav))
+
+    def test_build_cli_independent_pdf_without_metadata(self):
+        # Independent PDF with no metadata provided: runs with default academic naming
+        cmd = [sys.executable, str(SCRIPTS / 'build_research_document.py'),
+               '--pdf', str(self.pdf), '--raw', str(self.item),
+               '--out', str(self.out), '--state-dir', str(self.state),
+               '--id', 'ABCD2345']
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                                errors='replace', timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        # self.pdf has metadata title 'Research about material discovery'
+        expected = self.out / 'Research about material discovery.md'
+        self.assertTrue(expected.is_file(), f'Expected {expected} to exist')
+        self.assertFalse((self.out / '原文.md').exists())
 
 
 if __name__ == '__main__':
