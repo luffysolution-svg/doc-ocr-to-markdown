@@ -48,7 +48,7 @@ def asset_path(root: Path, value: str) -> Path:
 def read_items(folder: Path) -> tuple[list[dict], Path]:
     if not folder.is_dir():
         raise ValueError(f'缺少 OCR 分片目录: {folder}')
-    lists = sorted(folder.rglob('*content_list.json'))
+    lists = sorted([p for p in folder.rglob('*content_list.json') if not p.name.endswith('_v2.json')])
     if len(lists) != 1:
         raise ValueError(f'{folder}: 需要唯一 content_list.json，找到 {len(lists)} 个')
     path = contained(folder, lists[0].relative_to(folder).as_posix())

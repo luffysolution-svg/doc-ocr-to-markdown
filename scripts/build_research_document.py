@@ -44,7 +44,7 @@ def resolve_raw(raw: Path, identity: str | None) -> tuple[Path, str, Path]:
     if identity and (raw / identity).is_dir():
         folder = contained(raw, identity)
     else:
-        lists = list(raw.rglob('*content_list.json'))
+        lists = [p for p in raw.rglob('*content_list.json') if not p.name.endswith('_v2.json')]
         if len(lists) == 1:
             # Standard item dirs may have one nested extraction folder.
             first = lists[0].relative_to(raw).parts[0]

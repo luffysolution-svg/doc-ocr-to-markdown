@@ -30,6 +30,23 @@ def title_key(value: str) -> str:
     return ''.join(c for c in unicodedata.normalize('NFKC', value).casefold() if c.isalnum())
 
 
+def is_supplemental_title_variant(title_a: str, title_b: str) -> bool:
+    """Check if title difference is solely due to supplemental/appendix markers."""
+    ka = title_key(title_a)
+    kb = title_key(title_b)
+    markers = ('supplementalinformation', 'supplementaryinformation',
+               'supplementarymaterial', 'supplementalmaterial',
+               'supportinginformation', 'supplementary', 'appendix')
+    for m in markers:
+        if ka.replace(m, '') == kb or kb.replace(m, '') == ka:
+            return True
+        if ka.startswith(kb.replace(m, '')) and m in kb:
+            return True
+        if kb.startswith(ka.replace(m, '')) and m in ka:
+            return True
+    return False
+
+
 def normalize_doi(value: str) -> str:
     value = urllib.parse.unquote(str(value).strip())
     value = re.sub(r'^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)', '', value, flags=re.I)
@@ -283,11 +300,17 @@ def collect_metadata(preflight: dict, payload: dict | None = None,
         if fields.get('doi') and supplied.get('doi') and fields['doi'] != supplied['doi']:
             raise ValueError('Export DOI and current PDF DOI differ; review version/source association')
         if fields.get('title') and supplied.get('title') and title_key(fields['title']) != title_key(supplied['title']):
-            raise ValueError('Export title and current PDF title differ; review version/source association')
+            if is_supplemental_title_variant(fields['title'], supplied['title']):
+                provenance['review'].append('Supplied title identified as supplemental/supporting variant of PDF title')
+            else:
+                raise ValueError('Export title and current PDF title differ; review version/source association')
         first_page_key = title_key(preflight['first_page_text'])
         supplied_title_key = title_key(supplied.get('title', ''))
         title_match = bool(supplied_title_key and (
-            supplied_title_key in first_page_key or supplied_title_key == title_key(fields.get('title', ''))))
+            supplied_title_key in first_page_key or supplied_title_key == title_key(fields.get('title', ''))
+            or is_supplemental_title_variant(fields.get('title', ''), supplied.get('title', ''))
+            or (fields.get('title') and title_key(fields['title']) in first_page_key and any(
+                m in first_page_key for m in ('supplemental', 'supplementary', 'supporting', 'appendix')))))
         if title_match and len(supplied_title_key) < 12:
             provenance['review'].append('Short supplied title matches first-page/PDF title; identity evidence is weak and needs review')
         # A matching attachment hash establishes bytes, not bibliographic accuracy.

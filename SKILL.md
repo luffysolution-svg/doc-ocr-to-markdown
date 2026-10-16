@@ -1,6 +1,6 @@
 ---
 name: doc-ocr-to-markdown
-description: 将扫描教材、PDF图书、理工科课件、期刊论文、学位论文和讲义整理为保留图表与LaTeX公式的Markdown知识库。用于文档OCR、教材分章节转md、课件PPT转笔记、Zotero文献与独立PDF/Word按学术标准规范命名整理（第一作者-年份-标题）、文献元数据frontmatter、Obsidian笔记，以及排查与修复图片缺失、子图拆散、图题错挂或裁图不全。支持MinerU云端OCR、回源校正、公式全量KaTeX编译与浏览器渲染验收。
+description: 将扫描教材、PDF图书、理工科课件、期刊论文（含正文与补充材料SI）、学位论文和讲义整理为保留图表与LaTeX公式的Markdown知识库。用于文档OCR、教材分章节转md、课件PPT转笔记、Zotero文献与独立PDF/Word按学术标准规范命名整理（第一作者-年份-标题）、文献元数据frontmatter、Obsidian笔记，以及排查与修复图片缺失、子图拆散、多面板错切、图题错挂或裁图不全。支持MinerU云端OCR、回源校正、公式全量KaTeX编译与浏览器渲染验收。
 ---
 
 # 文档转 Markdown 知识库 (doc-ocr-to-markdown)

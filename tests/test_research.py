@@ -418,6 +418,41 @@ class ResearchEntryTests(unittest.TestCase):
         self.assertEqual(metadata.format_zotero_basename({}, 'paper_export', extra_candidates=candidates),
                          'Smith 等 - 2024 - AI in Materials Science')
 
+    def test_supplemental_title_variant_matching(self):
+        main_title = 'Inverse Design of Solid-State Materials via a Continuous Representation'
+        self.assertTrue(metadata.is_supplemental_title_variant(
+            main_title,
+            'Inverse Design of Solid-State Materials via a Continuous Representation - Supplemental Information'))
+        self.assertTrue(metadata.is_supplemental_title_variant(
+            main_title,
+            'Inverse Design of Solid-State Materials - Supplemental Information'))
+        self.assertTrue(metadata.is_supplemental_title_variant(
+            main_title,
+            'Inverse Design of Solid-State Materials: Supporting Information'))
+        self.assertFalse(metadata.is_supplemental_title_variant(
+            main_title,
+            'Crystal Graph Convolutional Neural Networks for Materials'))
+
+    def test_collect_metadata_accepts_supplemental_variant_without_differ_error(self):
+        preflight = {
+            'fields': {'title': 'Inverse Design of Solid-State Materials via a Continuous Representation'},
+            'pdf_properties': {'title': 'Inverse Design of Solid-State Materials via a Continuous Representation'},
+            'first_page_text': 'Supplemental Information\nInverse Design of Solid-State Materials via a Continuous Representation',
+            'sha256': 'dummy_hash',
+            'review': []
+        }
+        payload = {
+            'sha256': 'dummy_hash',
+            'metadata': {
+                'title': 'Inverse Design of Solid-State Materials via a Continuous Representation - Supplemental Information',
+                'authors': ['Juhwan Noh', 'Yousung Jung']
+            }
+        }
+        fields, provenance = metadata.collect_metadata(preflight, payload)
+        self.assertIn('Supplemental Information', fields['title'])
+        self.assertTrue(any('supplemental/supporting variant' in r for r in provenance['review']))
+
+
         # 6. Independent plain title fallback without author or year
         self.assertEqual(metadata.format_zotero_basename({}, 'Annual Research Review Report'),
                          'Annual Research Review Report')

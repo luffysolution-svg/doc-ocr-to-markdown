@@ -253,13 +253,13 @@ def audit_workspace(root: Path, manifest_path: Path | None = None) -> tuple[dict
             part_folder = contained(raw_dir, part_id)
             # Match the builder's unversioned content-list contract. Multiple
             # candidates must not depend on filesystem enumeration order.
-            clists = sorted(part_folder.rglob('*content_list.json'))
+            clists = sorted([p for p in part_folder.rglob('*content_list.json') if not p.name.endswith('_v2.json')])
             if len(clists) != 1:
                 raise ValueError(f'{part_folder}: expected one content_list.json, found {len(clists)}')
             clist = contained(raw_dir, clists[0].relative_to(raw_dir).as_posix())
             parts_to_scan.append((part_id, start_page, clist, part.get('end_page')))
     else:
-        for clist in sorted(raw_dir.rglob('*content_list*.json')):
+        for clist in sorted([p for p in raw_dir.rglob('*content_list.json') if not p.name.endswith('_v2.json')]):
             # A full relative filename distinguishes same-basename folders and
             # files, remains stable when another document is added, and is
             # identical whether the caller supplies ocr-work or ocr-work/raw.

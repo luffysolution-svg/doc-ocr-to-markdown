@@ -257,6 +257,18 @@ class AuditFiguresTests(unittest.TestCase):
                              ['a/content_list.json', 'b/content_list.json'])
             self.assertTrue(all(a['page'] == 1 for a in report['anomalies']))
 
+    def test_audit_workspace_without_manifest_ignores_content_list_v2(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.write_content(root, 'paper/content_list.json', self.fragmented_blocks(0))
+            # MinerU also generates a nested per-page list which must not cause parse errors
+            self.write_content(root, 'paper/content_list_v2.json', [['nested', 'list', 'per', 'page']])
+            report, repairs = audit_workspace(root)
+            self.assertEqual(len(report['sources']), 1)
+            self.assertEqual(report['sources'][0]['source_id'], 'paper/content_list.json')
+            self.assertEqual(len(repairs), 2)  # Unambiguous single document produces 2 repairs (update + skip)
+
+
     def test_manifest_ambiguous_content_paths_are_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -68,11 +68,15 @@ python scripts/build_research_document.py \
    - **多作者规则**：英文作者提取第一作者姓氏（LastName），中文作者提取全名；多于 1 位作者时自动追加 ` 等`；
    - **标题安全清洗与截断**：冒号 `:` 替换为 ` - `，文件系统保留字符 `\/*?"<>|` 替换为 `_`，合并空白并截断至最多 100 字符；
    - **自定义覆盖**：若需指定特定文件名，可传入 `--file <自定义文件名.md>`。
-2. **双栏阅读流保持**：
+2. **补充材料与附录规范 (Supplemental Information / SI)**：
+   - 期刊文献常附带独立补充材料（如 Elsevier 的 `mmc1.pdf`、Nature/Science 的 `Supporting Online Material`）；
+   - 出版社制作的 SI PDF 属性 title 经常直接沿用主文标题；系统内置附录标题变体容错机制（自动支持 `Supplemental Information`、`Supporting Information`、`Supplementary Material`、`Appendix` 等后缀），放行合法衍生版本；
+   - 交付建议：输出至独立目录（如 `{{firstCreator}} - {{year}} - {{title}} - Supplemental Information`），并通过 `--file` 传入专有文件名，避免与主篇同名冲突。
+3. **双栏阅读流保持**：
    - 科研论文默认使用 `--reading-order source`，保留 OCR 按物理页核对的阅读流，避免双栏排版因几何高度重叠而发生栏间交错。
-3. **Windows 路径安全**：
+4. **Windows 路径安全**：
    - 内部原子写入器使用 `.tmp.` 短前缀生成临时文件，彻底规避长路径嵌套下触发 Windows 260 字符（`MAX_PATH`）限制。
-4. **Obsidian 链接兼容**：
+5. **Obsidian 链接兼容**：
    - 生成的 `00-目录.md` 采用标准 URI 编码（`urllib.parse.quote`），原生支持 Obsidian 双链补全与跨平台文件打开。
 
 ---
@@ -115,6 +119,9 @@ zotero_item_uri: "zotero://select/library/items/ABCD2345"
    python scripts/audit_figures.py ./research-ocr/raw/条目key \
        --out-repairs ./repairs-draft.json --out-report ./figure-audit.json
    ```
+   - 顶刊论文常见 (A)、(B) 并排多面板插图（如潜空间映射图、相图与实验表征曲线），OCR 常将无独立题注的子面板拆碎为散落图块；
+   - 审查脚本自动计算 union bbox 外接矩形并提出 `update_image`（合并大图与完整题注）和 `skip`（过滤多余碎块）建议；
+   - 核对原页确认后，直接传入 `--repairs` 执行，系统将自动从原 PDF 高清重新裁切完整合图并彻底消除碎片孤儿图。
 2. **回源修复（零污染原则）**：
    - 审查后若发现文字误识、图题错挂或多面板拆分，在 `repairs.json` 中配置坐标与原文快照守卫：
      ```json
