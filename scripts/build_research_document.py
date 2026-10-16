@@ -113,9 +113,16 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
     title = fields.get('title') or pdf.stem
     if 'title' not in fields:
         provenance['review'].append('Navigation/H1 uses source filename only; not asserted as publication title')
+    if getattr(args, 'file', None):
+        target_file = args.file if args.file.endswith('.md') else f'{args.file}.md'
+    elif getattr(args, 'naming', 'classic') == 'zotero':
+        from research_metadata import format_zotero_basename
+        target_file = f'{format_zotero_basename(fields, pdf.stem)}.md'
+    else:
+        target_file = '原文.md'
     manifest = {'source': str(pdf), 'pages': preflight['page_count'], 'parts': [
         {'id': part_id, 'start_page': 1, 'end_page': preflight['page_count']}]}
-    chapters = [{'id': identity, 'title': title, 'file': '原文.md',
+    chapters = [{'id': identity, 'title': title, 'file': target_file,
                  'start': 1, 'end': preflight['page_count']}]
     research = contained(state, 'research')
     manifest_path = contained(research, 'manifest.json')
@@ -126,6 +133,7 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
     # ownership checks because a prior run happened to report success.
     fingerprint = {'pdf': preflight['sha256'], 'raw_path': str(item_dir), 'raw': _hash_tree(item_dir),
                    'metadata': fields, 'identity': identity, 'reading_order': args.reading_order,
+                   'file': target_file,
                    'repairs': sha256_file(Path(args.repairs)) if args.repairs else None,
                    'code': {p.name: sha256_file(p) for p in sorted(SCRIPTS.glob('*.py'))},
                    'math_validator': sha256_file(SCRIPTS / 'validate_math.cjs'),
@@ -188,7 +196,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--pdf', required=True, help='User-provided local source PDF')
     parser.add_argument('--raw', required=True, help='Single item dir, raw root, or workspace containing raw/')
     parser.add_argument('--metadata', help='Canonical object, Zotero item/data wrapper, or exported library JSON list')
-    parser.add_argument('--out', required=True, help='Delivery directory for ONE PDF; contains 原文.md')
+    parser.add_argument('--out', required=True, help='Delivery directory for ONE PDF; contains Markdown document')
+    parser.add_argument('--file', help='Output Markdown filename inside --out (default: 原文.md or zotero pattern when --naming zotero)')
+    parser.add_argument('--naming', choices=['classic', 'zotero'], default='classic',
+                        help='Naming style for chapter markdown: classic uses 原文.md, zotero uses {{firstCreator}} - {{year}} - {{title}}')
     parser.add_argument('--state-dir', help='External state directory (default sibling .<out-name>.build)')
     parser.add_argument('--repairs', help='Source-verified repairs forwarded unchanged to core')
     parser.add_argument('--id', help='Stable document ID; required for ambiguous multi-item metadata/OCR roots')

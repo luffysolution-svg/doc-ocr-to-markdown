@@ -360,6 +360,52 @@ class ResearchEntryTests(unittest.TestCase):
         self.assertEqual(report['automatic_checks'], 'fail')
         self.assertTrue(any(row['returncode'] for row in report['commands']))
 
+    def test_zotero_naming_basename_formatting(self):
+        # 1. Multi-author Zotero export record
+        zotero_item = {
+            'metadata': {
+                'data': {
+                    'title': 'Inverse Design of Solid-State Materials: via a Continuous Representation and Benchmarks',
+                    'date': '2019-11-06',
+                    'creators': [
+                        {'firstName': 'Juhwan', 'lastName': 'Noh', 'creatorType': 'author'},
+                        {'firstName': 'Jaehoon', 'lastName': 'Kim', 'creatorType': 'author'}
+                    ]
+                }
+            }
+        }
+        name = metadata.format_zotero_basename(zotero_item)
+        self.assertEqual(name, 'Noh 等 - 2019 - Inverse Design of Solid-State Materials - via a Continuous Representation and Benchmarks')
+
+        # 2. Canonical single author & Chinese author
+        single = {'authors': ['Albert Einstein'], 'date': '1905', 'title': 'Zur Elektrodynamik'}
+        self.assertEqual(metadata.format_zotero_basename(single), 'Einstein - 1905 - Zur Elektrodynamik')
+
+        chinese = {'authors': ['张三', '李四'], 'date': '2024-05', 'title': '材料基因组模型'}
+        self.assertEqual(metadata.format_zotero_basename(chinese), '张三 等 - 2024 - 材料基因组模型')
+
+        # 3. Truncation to 100 characters on title
+        long_title = {'authors': ['Author'], 'date': '2020', 'title': 'A' * 120}
+        formatted = metadata.format_zotero_basename(long_title)
+        self.assertEqual(formatted, f'Author - 2020 - {"A" * 100}')
+
+    def test_build_cli_supports_zotero_naming_and_explicit_file(self):
+        # Build with --naming zotero
+        meta_file = self.root / 'meta.json'
+        meta_file.write_text(json.dumps({
+            'title': 'Research about material discovery',
+            'authors': ['Alice Smith', 'Bob Jones'],
+            'date': '2025-02-15'
+        }), encoding='utf-8')
+        self.run_cli('--metadata', str(meta_file), '--naming', 'zotero')
+        expected_name = 'Smith 等 - 2025 - Research about material discovery.md'
+        target = self.out / expected_name
+        self.assertTrue(target.is_file(), f'Expected {target} to exist')
+        self.assertFalse((self.out / '原文.md').exists())
+        nav = (self.out / '00-目录.md').read_text(encoding='utf-8')
+        import urllib.parse
+        self.assertIn(expected_name, urllib.parse.unquote(nav))
+
 
 if __name__ == '__main__':
     unittest.main()

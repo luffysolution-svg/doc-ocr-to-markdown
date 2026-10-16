@@ -25,12 +25,13 @@ python scripts/mineru_ocr.py submit --out-root ./research-ocr \
 python scripts/build_research_document.py \
     --pdf ./research-work/sources/条目key-附件key.pdf \
     --raw ./research-ocr --metadata ./research-work/library.json --id 条目key \
-    --out ./科研知识库/文献标识 --state-dir ./research-state/文献标识
+    --out ./科研知识库/文献标识 --state-dir ./research-state/文献标识 \
+    --naming zotero
 ```
 
 独立 PDF 省略 `--metadata`；也可提供经原文核对的规范字段 JSON。`--raw` 接受单篇结果目录、包含各文献的 raw 根目录或含 raw 的 OCR 工作目录，多篇输入用 `--id` 精确选择。入口不会自行上传 OCR。
 
-每篇输出 `原文.md`、`00-目录.md`、`images/`；批量调用由外层逐篇隔离失败，并在根目录生成导航。构建状态始终位于阅读目录之外。目录用稳定文献标识消歧，不用标题判断重复。缓存核对 PDF、OCR、修复、元数据和代码哈希，仍会重跑自动门禁；人工修改及未登记文件会阻止覆盖。
+每篇输出 Markdown 正文（默认 `原文.md`，可指定 `--file` 或使用 `--naming zotero` 采用 `{{firstCreator}} - {{year}} - {{title}}` 规范命名）、`00-目录.md`、`images/`；批量调用由外层逐篇隔离失败，并在根目录生成导航。构建状态始终位于阅读目录之外。目录用稳定文献标识消歧，不用标题判断重复。缓存核对 PDF、OCR、修复、元数据和代码哈希，仍会重跑自动门禁；人工修改及未登记文件会阻止覆盖。
 
 论文默认 `--reading-order source`，保留每页经核对的 OCR 阅读顺序，避免按高度交错双栏。该选项不证明 OCR 原始顺序一定正确；须检查栏尾与下一栏开头、跨页续文、通栏图和图题。教材原入口默认几何排序保持不变。
 

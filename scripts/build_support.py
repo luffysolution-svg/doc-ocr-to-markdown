@@ -233,7 +233,7 @@ class Publisher:
                 created_dirs.append(directory)
 
         def replace_bytes(path: Path, data: bytes) -> None:
-            fd, temporary = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
+            fd, temporary = tempfile.mkstemp(prefix='.tmp.', suffix='.tmp', dir=path.parent)
             try:
                 with os.fdopen(fd, 'wb') as stream:
                     stream.write(data)

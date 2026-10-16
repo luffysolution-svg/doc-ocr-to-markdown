@@ -331,3 +331,61 @@ def collect_metadata(preflight: dict, payload: dict | None = None,
     provenance['missing_fields'] = [key for key in ('title', 'authors', 'abstract') if key not in fields]
     provenance['review'].extend(f'Missing {key}: needs source review' for key in provenance['missing_fields'])
     return fields, provenance
+
+
+def sanitize_filename_title(title: str, max_length: int = 100) -> str:
+    """Sanitize title for filesystem safety following Zotero conventions."""
+    t = str(title).replace(':', ' - ')
+    t = re.sub(r'[\\/*?\"<>|]', '_', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    if len(t) > max_length:
+        t = t[:max_length].rstrip(' .-_')
+    return t
+
+
+def format_zotero_basename(metadata: dict | None, fallback_stem: str = '') -> str:
+    """Format file/folder basename following Zotero pattern:
+    {{ firstCreator suffix=" - " }}{{ year suffix=" - " }}{{ title truncate="100" }}
+    Supports canonical metadata dict, Zotero payload/item/data wrapper, or empty dict.
+    """
+    if not isinstance(metadata, dict):
+        return fallback_stem or 'document'
+    data = metadata.get('metadata', metadata)
+    if isinstance(data, dict):
+        data = data.get('data', data)
+    if not isinstance(data, dict):
+        data = metadata
+
+    creators = data.get('creators') or data.get('authors') or metadata.get('authors') or []
+    first_creator = ''
+    if creators and isinstance(creators, list):
+        first = creators[0]
+        multi = len(creators) > 1
+        if isinstance(first, dict):
+            name = first.get('lastName') or first.get('name') or first.get('firstName') or ''
+        elif isinstance(first, str):
+            s = first.strip()
+            if ',' in s:
+                name = s.split(',')[0].strip()
+            elif re.search(r'[\u4e00-\u9fff]', s):
+                name = s
+            else:
+                parts = s.split()
+                name = parts[-1] if parts else s
+        else:
+            name = str(first).strip()
+        name = name.strip()
+        if name:
+            first_creator = f'{name} 等' if multi else name
+
+    date_str = str(data.get('date') or metadata.get('date') or '')
+    m_year = re.search(r'\b(19\d\d|20\d\d)\b', date_str)
+    year = m_year.group(1) if m_year else ''
+
+    raw_title = data.get('title') or metadata.get('title') or ''
+    title = sanitize_filename_title(raw_title, max_length=100) if raw_title else ''
+
+    parts = [p for p in (first_creator, year, title) if p]
+    if not parts:
+        return fallback_stem or 'document'
+    return ' - '.join(parts)
