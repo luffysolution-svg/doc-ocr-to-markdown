@@ -172,6 +172,9 @@ def validate(root: Path, images_dir: Path | None) -> dict:
         if orphans:
             warnings.append(f'{len(orphans)} 张图片未被任何文档引用')
 
+    from book_features import validate_agent_index
+    errors.extend(validate_agent_index(root))
+
     report = {
         'status': 'pass' if not errors else 'fail',
         'root': str(root),

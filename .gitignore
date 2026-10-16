@@ -12,7 +12,7 @@ package-lock.json
 .ocr-work/
 .ocr_work/
 ocr-out/
-raw/
+/raw/
 job.json
 status.json
 formulas.json

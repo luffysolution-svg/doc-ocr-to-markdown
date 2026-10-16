@@ -89,7 +89,8 @@ class BuildTests(unittest.TestCase):
         return result
 
     def text(self, name='ch01.md'):
-        return (self.out / name).read_text(encoding='utf-8')
+        root = self.out.parent / f'.{self.out.name}.build' if name in ('build-report.json', OWNERSHIP) else self.out
+        return (root / name).read_text(encoding='utf-8')
 
     def refs(self, text):
         return re.findall(r'!\[[^\]]*\]\(([^)]+)\)', text)
@@ -185,12 +186,13 @@ class BuildTests(unittest.TestCase):
                 raise RuntimeError('synthetic rendering failure')
         self.assertIsNone(build.FigureStore(self.base).crop(BrokenPage(), (0, 0, 1, 1)))
 
-    def test_full_page_scan_not_a_figure_or_text_suppressor(self):
-        text, stats = self.render([block('image', bbox=[0, 0, 1000, 1000], img_path='scan.png'),
-                                   block(text='短正文')])
-        self.assertNotIn('![', text)
+    def test_full_page_scan_preserved_without_suppressing_text(self):
+        ocr = self.part('part01', [])
+        text, stats = self.render([block('image', bbox=[0, 0, 1000, 1000], img_path='images/same.png'),
+                                   block(text='短正文')], ocr_dir=ocr)
+        self.assertEqual(len(self.refs(text)), 1)
         self.assertIn('短正文', text)
-        self.assertEqual(stats['full_page_scans_skipped'], 1)
+        self.assertEqual(stats['full_page_scans_preserved'], 1)
 
     def test_title_one_h1_exercises_and_page_top_prose(self):
         items = [block(text='OCR错误书名', text_level=1),
@@ -207,6 +209,138 @@ class BuildTests(unittest.TestCase):
         self.assertIn('\n1. 计算这个数\n', text)
         self.assertIn('\n(2) 计算另一个数\n', text)
         self.assertNotIn('## 这是页顶正文', text)
+
+    def test_book_exercise_context_and_elective_headings(self):
+        text, _ = self.render([
+            block(text=r'\*1.1 选读小节', text_level=1),
+            block(text='小节内的次级标题', text_level=1),
+            block(text='复习题'),
+            block(text=r'1.1 计算 $x_1$ 的值。', text_level=1),
+            block(text='① 解释原因', text_level=1),
+            block(text='（一）给出条件', text_level=1),
+            block(text='这是很长的题干。它不应成为标题。', text_level=1)])
+        self.assertIn('## ★ 1.1 选读小节', text)
+        self.assertIn('### 小节内的次级标题', text)
+        self.assertIn('## 复习题', text)
+        self.assertNotIn('## 1.1 计算', text)
+        self.assertNotIn('## ①', text)
+        self.assertNotIn('## （一）', text)
+        self.assertIn('$x_1$', text)
+        self.assertNotIn('## 这是很长', text)
+
+    def test_split_chapter_title_matches_authoritative_title_only(self):
+        items = [block(text='第一章', text_level=1), block(text='气体①', text_level=1),
+                 block(text='本章基本要求'), block(text='完整正文')]
+        text, stats = build.build_chapter(items, None, None, self.base / 'images' / 'ch',
+                                         '第一章 气体', [], mode='book')
+        self.assertEqual(re.findall(r'^#{1,2} .*', text, re.M), ['# 第一章 气体', '## 本章基本要求'])
+        self.assertIn('完整正文', text)
+        self.assertEqual(stats['duplicate_chapter_labels'], 2)
+        self.assertEqual(items[0]['text'], '第一章')
+
+    def test_substantive_footer_kept_and_running_footer_removed(self):
+        review = []
+        items = [block('footer', text='① 本章补充说明，含公式 $x^2$。'),
+                 block('footer', text='第一章 气体'), block(text='正文'),
+                 block('footer', text='第一章 气体', page=1),
+                 block('header', text='2.1 热力学概论'),
+                 block('header', text=r'2.10 气体的 $\Delta U$ 和 $\Delta H$'),
+                 block('header', text=r'$\Delta G$')]
+        text, _ = build.build_chapter(items, None, None, self.base / 'images' / 'ch',
+                                     '气体', review, mode='book')
+        self.assertIn('① 本章补充说明，含公式 $x^2$。', text)
+        self.assertNotIn('第一章 气体', text)
+        self.assertNotIn('热力学概论', text)
+        self.assertNotIn('$\\Delta G$', text)
+        self.assertEqual(len(review), 1)
+        self.assertEqual(review[0]['kind'], 'retained_marginal_text')
+
+    def test_default_delivery_is_clean_and_index_requires_flag(self):
+        self.book(total=1)
+        self.part('part01', [block(text='正文 $x$')])
+        self.cli(book=True)
+        self.assertEqual({p.name for p in self.out.iterdir()}, {'00-目录.md', 'ch01.md'})
+        self.assertTrue((self.out.parent / '.out.build' / 'build-report.json').is_file())
+        self.cli('--agent-index', book=True)
+        self.assertTrue((self.out / 'agent' / 'chunks.jsonl').is_file())
+        from book_features import validate_agent_index
+        self.assertEqual(validate_agent_index(self.out), [])
+
+    def test_repairs_stale_failure_preserves_delivery_and_state(self):
+        self.book(total=1)
+        self.part('part01', [block(text='原文')])
+        self.cli(book=True)
+        before = self.snapshot()
+        repair = self.base / 'repairs.json'
+        self.write_json(repair, [{'page': 1, 'bbox': [100, 200, 600, 400], 'field': 'text',
+                                  'old': '过期', 'new': '新文', 'reason': '核对原页'}])
+        self.cli('--repairs', str(repair), book=True, ok=False)
+        self.assertEqual(self.snapshot(), before)
+        self.write_json(repair, [{'page': 1, 'bbox': [100, 200, 600, 400], 'field': 'text',
+                                  'old': '原文', 'new': '新文', 'reason': '核对原页'}])
+        self.cli('--repairs', str(repair), book=True)
+        self.assertIn('新文', self.text())
+
+    def test_empty_page_mapping_and_partial_agent_rebuild(self):
+        _, sections = self.book(total=2)
+        self.part('part01', [block(text='第一页')])
+        self.part('part02', [])
+        self.cli('--agent-index', book=True)
+        from book_features import validate_agent_index
+        self.assertEqual(validate_agent_index(self.out), [])
+        report = json.loads(self.text('build-report.json'))
+        self.assertEqual(report['page_maps']['ch02'][0]['pdf_page'], 2)
+        self.assertEqual(report['page_maps']['ch02'][0]['status'], 'no_output')
+        self.part('part01', [block(text='更新第一页')])
+        self.cli('--agent-index', '--only', 'ch01', book=True)
+        self.assertEqual(validate_agent_index(self.out), [])
+        self.assertIn('ch02', (self.out / 'agent' / 'manifest.json').read_text(encoding='utf-8'))
+
+    def test_review_regressions_keep_prose_and_heading_boundaries(self):
+        text, _ = self.render([block(text='8.1.1 首个深层小节'),
+                               block(text='平衡', text_level=1), block(text='另一段'),
+                               block(text='平衡'), block(text='8.1 计算体系的熵变。'),
+                               block(text='第一章介绍了热力学基础。'),
+                               block(text='习题'), block(text='附录'), block(text='1.1 常数表')])
+        self.assertIn('## 8.1.1 首个深层小节', text)
+        self.assertIn('另一段\n\n平衡', text)
+        self.assertNotIn('## 8.1 计算', text)
+        self.assertNotIn('## 第一章介绍', text)
+        self.assertIn('## 1.1 常数表', text)
+
+    def test_short_discarded_and_repeated_footnotes_preserved(self):
+        text, _ = self.render([block('discarded', text='[1] 标准态为纯物质'),
+                               block('footer', text='① 质量守恒'),
+                               block('footer', text='① 质量守恒', page=1)])
+        self.assertIn('[1] 标准态为纯物质', text)
+        self.assertEqual(text.count('① 质量守恒'), 2)
+
+    def test_equation_prose_suffix_follows_formula(self):
+        text, _ = self.render([block('equation', text=r'\text{和像差（主要是球差} \varDelta r_s = x) 。')])
+        self.assertLess(text.index('和像差'), text.index('\\varDelta'))
+        self.assertLess(text.index('\\varDelta'), text.index('）。'))
+
+    def test_existing_agent_index_cannot_silently_become_stale(self):
+        self.book(total=1)
+        self.part('part01', [block(text='原文')])
+        self.cli('--agent-index', book=True)
+        before = self.snapshot()
+        self.part('part01', [block(text='新文')])
+        self.cli(book=True, ok=False)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_partial_rebuild_retains_untouched_repair_audit(self):
+        self.book()
+        for i in (1, 2):
+            self.part(f'part{i:02}', [block(text=f'原文{i}')])
+        repair = self.base / 'repairs.json'
+        self.write_json(repair, [{'page': 2, 'bbox': [100, 200, 600, 400], 'field': 'text',
+                                  'old': '原文2', 'new': '已校正文2', 'reason': '核对原页'}])
+        self.cli('--repairs', str(repair), book=True)
+        self.cli('--only', 'ch01', book=True)
+        report = json.loads(self.text('build-report.json'))
+        self.assertEqual(report['repairs'][0]['page'], 2)
+        self.assertIn('已校正文2', self.text('ch02.md'))
 
     def test_paragraphs_tables_equations_not_joined(self):
         text, stats = self.render([block(text='上页未完'), block(text='下页第一段', page=1),

@@ -21,7 +21,7 @@
       00-目录.md
       01-第一章.md ...
       images/ch01/figure-001.png ...
-      build-report.json          各章统计与待人工确认项
+    构建状态保存在输出旁的 .<目录名>.build/；--agent-index 显式生成检索文件。
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ import re
 import sys
 from console_output import safe_print as print
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import ExitStack
 from urllib.parse import quote
 
@@ -344,6 +344,40 @@ def image_groups(items: list[dict]) -> dict[int, list[dict]]:
     return groups
 
 
+SPECIAL_HEADINGS = {'本章基本要求', '拓展学习资源', '复习题', '习题', '附录'}
+EXERCISE = re.compile(r'^(?:[（(](?:\d+|[一二三四五六七八九十]+)[）)]|[①②③④⑤⑥⑦⑧⑨⑩]|\d+[.．、)）](?!\d))')
+SECTION = re.compile(r'^(?:★\s*)?\d+(?:\.\d+)+\s+\S')
+
+
+def heading_text(text: str) -> str:
+    text = re.sub(r'^\\\*\s*|^[*＊]\s*', '★ ', text.strip())
+    return plain_text(text).strip()
+
+
+def chapter_title_parts(items: list[dict], title: str) -> set[int]:
+    """Only suppress split chapter labels when they reproduce the supplied title."""
+    candidates = [(index, item) for index, item in enumerate(items)
+                  if item.get('type') == 'text' and item.get('text', '').strip()]
+    for pos, (index, item) in enumerate(candidates[:6]):
+        text = item['text'].strip()
+        if not re.fullmatch(r'第[一二三四五六七八九十百\d]+章', text):
+            continue
+        combined, matched = text, {index}
+        if nkey(combined) == nkey(title):
+            return matched
+        for other_index, other in candidates[pos + 1:pos + 3]:
+            if other.get('page_idx', 0) != item.get('page_idx', 0):
+                break
+            value = other['text'].strip()
+            if not other.get('text_level') or len(value) > 60 or '$' in value:
+                break
+            combined += value
+            matched.add(other_index)
+            if nkey(combined.rstrip('①②③④⑤⑥⑦⑧⑨⑩')) == nkey(title):
+                return matched
+    return set()
+
+
 def inline_math(text: str) -> str:
     """Use the shared context-aware normalizer, verified by test_math.py.
 
@@ -355,7 +389,8 @@ def inline_math(text: str) -> str:
 def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: Path | None,
                   image_dir: Path, title: str, review: list,
                   ocr_dir: Path | None = None, mode: str = 'slides',
-                  page_offset: int = 0, keep_table_images: bool = False) -> tuple[str, dict]:
+                  page_offset: int = 0, keep_table_images: bool = False,
+                  page_map: list | None = None, page_count: int | None = None) -> tuple[str, dict]:
     store = FigureStore(image_dir)
     stats = defaultdict(int)
     title = re.sub(r'\s+', ' ', title).strip()
@@ -374,14 +409,27 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
             pdf = resources.enter_context(fitz.open(pdf_path))
             if page_offset < 0 or any(pi + page_offset >= len(pdf) for pi in by_page):
                 raise ValueError('OCR 页码超出原 PDF 范围')
+        if page_count is not None:
+            if type(page_count) is not int or page_count < 1 or any(pi >= page_count for pi in by_page):
+                raise ValueError('章节页数或 OCR 页码无效')
+            for pi in range(page_count):
+                by_page[pi]
         return _render_pages(by_page, source_pages, pdf, image_dir, title, review,
-                             ocr_dir, mode, page_offset, keep_table_images, store, content, stats)
+                             ocr_dir, mode, page_offset, keep_table_images, store, content, stats,
+                             page_map=page_map)
 
 
 def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
-                  mode, page_offset, keep_table_images, store, content, stats):
+                  mode, page_offset, keep_table_images, store, content, stats, page_map=None):
     headings = set()
     last_heading = None
+    in_exercises = False
+    have_section = False
+    previous_level = 1
+    all_items = [item for pi in sorted(by_page) for item in by_page[pi]]
+    title_parts = {id(all_items[i]) for i in chapter_title_parts(all_items, title)} if mode == 'book' else set()
+    marginal_counts = Counter(nkey(item.get('text', '')) for item in all_items
+                              if item.get('type') in ('header', 'footer'))
     for pi in sorted(by_page):
         page_items = by_page[pi]
         actual_pi = pi + page_offset
@@ -398,8 +446,25 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
         for item_index, item in enumerate(page_items):
             kind = item.get('type')
             item_ocr_dir = Path(item['_ocr_dir']) if item.get('_ocr_dir') else ocr_dir
-            if kind in ('header', 'footer', 'page_number', 'discarded'):
+            if id(item) in title_parts:
+                stats['duplicate_chapter_labels'] += 1
                 continue
+            if kind == 'page_number':
+                continue
+            if kind in ('header', 'footer', 'discarded'):
+                marginal = str(item.get('text', '')).strip()
+                running_title = bool(SECTION.match(heading_text(marginal))) or nkey(marginal) == nkey(title)
+                pure_math = bool(re.fullmatch(r'\$[^$]+\$', marginal))
+                substantive = not (running_title or pure_math) and (
+                    len(marginal) >= 40 or bool(re.match(r'^[①②③④⑤⑥⑦⑧⑨⑩]', marginal))
+                    or bool(re.match(r'^(?:[*＊]|\[\d+\]|[（(]\d+[）)])\s*\S', marginal))
+                    or (bool(marginal) and marginal_counts[nkey(marginal)] == 1
+                        and bool(re.search(r'[。；!?！？]', marginal))))
+                if not substantive:
+                    continue
+                review.append({'page': actual_pi + 1, 'kind': 'retained_marginal_text',
+                               'ocr_type': kind, 'text': marginal})
+                kind = 'page_footnote'
 
             # ---- 图片 ----
             if kind in ('image', 'chart'):
@@ -408,12 +473,13 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                     root = Path(member['_ocr_dir']) if member.get('_ocr_dir') else ocr_dir
                     if root is not None and member.get('img_path'):
                         asset_path(root, str(member['img_path']))
-                if full_page_scan(item):
-                    stats['full_page_scans_skipped'] += 1
-                    continue
                 if id(item) in grouped_members:
                     continue
-                group = groups[item_index]
+                group = groups.get(item_index, [item])
+                if full_page_scan(item):
+                    stats['full_page_scans_preserved'] += 1
+                    review.append({'page': actual_pi + 1, 'kind': 'full_page_image_preserved',
+                                   'bbox': item.get('bbox')})
                 box = union_box([box_of(member) for member in group])
                 caps = captions_of(group)
                 names = []
@@ -467,11 +533,19 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
 
                 # 标题判断逻辑：book 模式遵循严格章节与节号规则，避免页顶正文误升标题
                 if mode == 'book':
-                    is_chapter_title = bool(re.match(r'^第[一二三四五六七八九十百\d]+章', text))
-                    sec_match = re.match(r'^[*＊§]?\s*\d+(?:\.\d+)+\s+\S', text)
-                    is_special_heading = text in ('本章基本要求', '拓展学习资源', '复习题', '习题', '附录')
-                    exercise = bool(re.match(r'^(?:[（(]\d+[）)]|\d+[.、)）](?!\d))', text))
-                    is_heading = not exercise and (bool(item.get('text_level')) or (sec_match and len(text) < 65) or is_chapter_title or is_special_heading)
+                    disp = heading_text(text)
+                    is_chapter_title = bool(re.match(r'^第[一二三四五六七八九十百\d]+章(?:\s+[^。！？?!]{1,60})?$', disp))
+                    is_special_heading = disp in SPECIAL_HEADINGS
+                    if disp in ('复习题', '习题'):
+                        in_exercises = True
+                    elif is_chapter_title or disp == '附录':
+                        in_exercises = False
+                    sec_match = SECTION.match(disp) if not in_exercises and not re.search(r'[。！？?!]', text) else None
+                    exercise = bool(EXERCISE.match(text)) or (in_exercises and bool(re.match(r'^\d+\.\d+\b', text)))
+                    trusted_title = (bool(item.get('text_level')) and len(text) < 80
+                                     and not re.search(r'[。？！?！]', text) and not in_exercises)
+                    is_heading = not exercise and (trusted_title or (sec_match and len(text) < 65)
+                                                   or is_chapter_title or is_special_heading)
                 else:
                     is_heading = bool(item.get('text_level')) or (box_of(item)[1] < 0.152 and len(text) < 100 and '$' not in text)
 
@@ -479,16 +553,21 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                     if nkey(text) == nkey(title):
                         continue
                     identity = nkey(text)
-                    if identity == last_heading or identity in headings:
-                        last_heading = identity
+                    if identity == last_heading and identity in headings:
                         continue
                     level = 2
+                    if mode == 'book' and have_section and not (sec_match or is_special_heading or is_chapter_title):
+                        level = 3
+                    if mode == 'book' and sec_match:
+                        have_section = True
                     m = re.match(r'^(\d+(?:\.\d+)*)', text)
-                    if m:
+                    if m and not (mode == 'book' and not sec_match):
                         level = max(2, min(5, len(m.group(1).split('.'))))
                     elif re.match(r'^第[一二三四五六七八九十百\d]+章', text):
                         level = 2
-                    disp = plain_text(text) if ('\\' in text or '$' in text) else text
+                    disp = heading_text(text) if mode == 'book' else (plain_text(text) if ('\\' in text or '$' in text) else text)
+                    level = min(level, previous_level + 1)
+                    previous_level = level
                     emit.append('#' * level + ' ' + disp)
                     headings.add(identity)
                     last_heading = identity
@@ -514,11 +593,10 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                                            'ocr': text, 'source': match[2]['text']})
                             stats['text_review'] += 1
 
-                if nkey(text) != last_heading:
-                    # Conservative: OCR does not reliably distinguish page continuation
-                    # from a new paragraph. Keep boundaries, including across pages.
-                    emit.append(inline_math(text))
-                    stats['paragraphs'] += 1
+                # OCR cannot reliably distinguish page continuation from a new paragraph.
+                emit.append(inline_math(text))
+                last_heading = None
+                stats['paragraphs'] += 1
                 continue
 
             # ---- 公式 ----
@@ -528,7 +606,7 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                     continue
                 leading, body, trailing = split_leading_prose(body)
                 if leading:
-                    emit.append(leading + (trailing or ''))
+                    emit.append(leading)
                     stats['equation_captions'] += 1
                 body = body.strip()
                 if not body:
@@ -536,6 +614,9 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                 if body.startswith('$$'):
                     body = body[2:-2].strip()
                 emit.append(f'$$\n{body}\n$$')
+                if trailing:
+                    emit.append(trailing)
+                last_heading = None
                 stats['equations'] += 1
                 continue
 
@@ -577,12 +658,21 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                 if text and not LABEL_ONLY.match(text):
                     emit.append(inline_math(text))
 
+        page_start = len('\n\n'.join(content).splitlines()) + 2 if content else 1
         if mode == 'slides':
             content.extend(figure_blocks)
         content.extend(emit)
+        if page_map is not None:
+            output_blocks = figure_blocks + emit if mode == 'slides' else emit
+            page_end = len('\n\n'.join(content).splitlines())
+            page_map.append({'pdf_page': actual_pi + 1, 'start_line': page_start if output_blocks else None,
+                             'end_line': page_end if output_blocks else None,
+                             'status': 'included' if output_blocks else 'no_output',
+                             'ocr_blocks': len(page_items)})
 
     text = '\n\n'.join(b for b in content if b and b.strip())
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    if page_map is None:
+        text = re.sub(r'\n{3,}', '\n\n', text)
     stats['figures'] = store.count
     return text.strip() + '\n', dict(stats)
 
@@ -600,6 +690,9 @@ def main() -> None:
     parser.add_argument('--pdf', help='整本原 PDF 文件路径（用于高清裁切原图与数据表原图）')
     parser.add_argument('--pdf-dir', help='PDF 目录（源文件里没有的图从这里裁切）')
     parser.add_argument('--keep-table-images', action='store_true', help='为复杂数据表额外保留原扫描图高清裁片，实现文字检索与原版验算双轨保真')
+    parser.add_argument('--repairs', help='回看原页后确认的修复清单 JSON；旧值或定位不符则停止')
+    parser.add_argument('--agent-index', action='store_true', help='显式生成 Agent/RAG 分块、页码映射与检索清单')
+    parser.add_argument('--state-dir', help='外部构建状态目录，默认是输出目录旁的 .<目录名>.build')
     parser.add_argument('--source-dir', help='源文件目录（用于文字校正与内嵌原图，如 PPTX）')
     parser.add_argument('--source-glob', default='*.pptx')
     parser.add_argument('--only', nargs='*', help='只处理这些子目录（data_id）')
@@ -617,8 +710,12 @@ def main() -> None:
         parser.error(f'OCR 目录不存在: {raw_root}')
     if out_root.resolve().is_relative_to(raw_root) or raw_root.is_relative_to(out_root.resolve()):
         parser.error('输入和输出目录不得相互包含')
-    publisher = Publisher(out_root, args.overwrite)
+    publisher = Publisher(out_root, args.overwrite, Path(args.state_dir).absolute() if args.state_dir else None)
+    if raw_root.is_relative_to(publisher.state_root.resolve()) or publisher.state_root.resolve().is_relative_to(raw_root):
+        parser.error('构建状态与 OCR 输入目录不得相互包含')
     previous = publisher.previous_report()
+    if not args.agent_index and contained(out_root, 'agent/manifest.json').exists():
+        parser.error('已有 Agent 索引；重建时显式添加 --agent-index 更新，或使用新的干净输出目录')
     only = set(args.only) if args.only is not None else None
     if only == set():
         parser.error('--only 至少需要一个 id')
@@ -639,6 +736,11 @@ def main() -> None:
             source = Path(manifest['source'])
             pdf_path = source if source.is_absolute() else manifest_path.parent / source
         blocks = load_book(raw_root, manifest, sections, pdf_path)
+        repairs_applied = []
+        if args.repairs:
+            from book_features import apply_repairs
+            blocks, repairs_applied = apply_repairs(
+                blocks, json.loads(Path(args.repairs).read_text(encoding='utf-8')), pdf_path)
         identities = {sec['id'] for sec in sections}
         if only and not only <= identities:
             raise ValueError(f'--only 未知章节: {sorted(only - identities)}')
@@ -650,8 +752,11 @@ def main() -> None:
             jobs.append({'id': sec['id'], 'title': sec['title'],
                          'file': sec.get('file', f"{sec['id']}.md"),
                          'items': items, 'pdf': pdf_path, 'offset': sec['start'] - 1,
-                         'source': None, 'ocr_dir': None})
+                         'source': None, 'ocr_dir': None, 'page_count': sec['end'] - sec['start'] + 1})
     else:
+        if args.repairs:
+            parser.error('--repairs 需要 --manifest 与 --chapters，以确定全书页码')
+        repairs_applied = []
         titles = json.loads(Path(args.titles).read_text(encoding='utf-8')) if args.titles else {}
         folders = sorted(d for d in raw_root.iterdir() if d.is_dir())
         identities = {d.name for d in folders}
@@ -679,7 +784,7 @@ def main() -> None:
             jobs.append({'id': folder.name, 'title': title, 'file': f'{folder.name}.md',
                          'items': items, 'pdf': pdf_path, 'offset': 0,
                          'source': load_source(source_path) if source_path else None,
-                         'ocr_dir': ocr_dir})
+                         'ocr_dir': ocr_dir, 'page_count': max((i.get('page_idx', 0) for i in items), default=0) + 1})
     if not jobs:
         raise ValueError('没有找到可装配的 OCR 结果')
     if previous.get('chapters') and previous.get('mode') != mode:
@@ -687,7 +792,7 @@ def main() -> None:
     files_seen = set()
     for job in jobs:
         filename = relative_name(job['file'])
-        if filename.split('/')[0] in RESERVED or Path(filename).suffix.lower() != '.md':
+        if filename.split('/')[0].casefold() in {name.casefold() for name in RESERVED} or Path(filename).suffix.lower() != '.md':
             raise ValueError(f'章节文件名保留或无效: {filename}')
         if filename.casefold() in files_seen:
             raise ValueError(f'重复输出文件: {filename}')
@@ -696,13 +801,17 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix='markdown-build-') as temporary:
         stage = Path(temporary)
         updated, review_all = [], dict(previous.get('review', {}))
+        page_maps = dict(previous.get('page_maps', {}))
         for job in jobs:
             image_dir = stage / 'images' / job['id']
             review = []
+            page_map = []
             text, stats = build_chapter(
                 job['items'], job['source'], job['pdf'], image_dir, job['title'], review,
                 ocr_dir=job['ocr_dir'], mode=mode, page_offset=job['offset'],
-                keep_table_images=args.keep_table_images)
+                keep_table_images=args.keep_table_images, page_map=page_map,
+                page_count=job['page_count'])
+            page_maps[job['id']] = page_map
             # Images live at output root/images even for nested chapter paths.
             prefix = '../' * (len(Path(job['file']).parts) - 1)
             text = text.replace('](images/', '](' + prefix + 'images/')
@@ -726,8 +835,29 @@ def main() -> None:
             label = re.sub(r'[\[\]\n]', ' ', entry['title'])
             lines.append(f'- [{label}]({quote(entry["file"], safe="/")})')
         (stage / '00-目录.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        if args.agent_index:
+            from book_features import write_agent_index
+            for entry in report:
+                retained = contained(stage, entry['file'])
+                if not retained.exists():
+                    existing = contained(out_root, entry['file'])
+                    retained.parent.mkdir(parents=True, exist_ok=True)
+                    retained.write_bytes(existing.read_bytes())
+                if entry['id'] not in page_maps:
+                    raise ValueError('旧版本缺少页码映射，请完整重建后生成 Agent 索引')
+            source_ref = None
+            if args.manifest and pdf_path:
+                import os
+                source_ref = Path(os.path.relpath(pdf_path, out_root)).as_posix()
+            write_agent_index(stage, report, page_maps, source_pdf=source_ref)
+        retained_repairs = []
+        if only is not None:
+            replaced_pages = {entry['pdf_page'] for job in jobs for entry in page_maps[job['id']]}
+            retained_repairs = [repair for repair in previous.get('repairs', [])
+                                if repair.get('page') not in replaced_pages]
         (stage / 'build-report.json').write_text(json.dumps(
-            {'chapters': report, 'review': review_all, 'mode': mode,
+            {'chapters': report, 'review': review_all, 'mode': mode, 'page_maps': page_maps,
+             'repairs': retained_repairs + repairs_applied,
              'paragraph_joining': 'disabled: conservative preservation of OCR paragraph/page boundaries'},
             ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         publisher.publish(stage)

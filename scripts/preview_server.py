@@ -29,6 +29,12 @@ from console_output import safe_print as print
 
 from normalize_math import scan_math, math_issues
 CDN = 'https://cdn.jsdelivr.net/npm/katex@0.19.0/dist'
+IMAGE_TYPES = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+    '.bmp': 'image/bmp', '.tif': 'image/tiff', '.tiff': 'image/tiff',
+    '.ico': 'image/vnd.microsoft.icon', '.avif': 'image/avif',
+}
 CSS = (
     'body{font-family:"Microsoft YaHei",system-ui,sans-serif;max-width:940px;'
     'margin:36px auto;padding:0 28px;color:#20252b;line-height:1.85;font-size:17px;background:#fff}'
@@ -109,8 +115,12 @@ class Handler(BaseHTTPRequestHandler):
         if not target.is_relative_to(base):
             self.send_error(403)
             return
-        if local_asset or request.startswith('/images/'):
+        if local_asset:
             self._file(target)
+            return
+        image_type = IMAGE_TYPES.get(target.suffix.lower())
+        if image_type:
+            self._file(target, content_type=image_type)
             return
         if request != '/' and not target.suffix:
             target = target.with_suffix('.md').resolve()
@@ -154,13 +164,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _file(self, target: Path):
+    def _file(self, target: Path, content_type: str | None = None):
         if not target.is_file():
             self.send_error(404)
             return
         data = target.read_bytes()
         self.send_response(200)
-        self.send_header('Content-Type', mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
+        self.send_header('Content-Type', content_type or mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
         self.send_header('Content-Length', str(len(data)))
         self.end_headers()
         self.wfile.write(data)

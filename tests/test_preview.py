@@ -12,6 +12,7 @@ import tempfile
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
+from urllib.parse import quote
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -72,12 +73,17 @@ class PreviewTests(unittest.TestCase):
         STATE.update(self.previous)
         self.tmp.cleanup()
 
-    def get(self, path):
+    def get_response(self, path):
         connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
-        connection.request('GET', path)
-        response = connection.getresponse()
-        status, content = response.status, response.read()
-        connection.close()
+        try:
+            connection.request('GET', path)
+            response = connection.getresponse()
+            return response.status, response.read(), dict(response.getheaders())
+        finally:
+            connection.close()
+
+    def get(self, path):
+        status, content, _ = self.get_response(path)
         return status, content
 
     def test_root_images_and_local_assets(self):
@@ -89,11 +95,54 @@ class PreviewTests(unittest.TestCase):
         self.assertIn(b'footnote-ref', body)
         self.assertIn(b'Footnote', body)
 
+    def test_images_in_other_directories_and_encoded_paths(self):
+        fixtures = [
+            ('source/a.svg', b'<svg xmlns="http://www.w3.org/2000/svg"/>', 'image/svg+xml'),
+            ('chapters/images/a.png', b'PNG', 'image/png'),
+            ('source/中文 空格/示意 图.svg', b'<svg/>', 'image/svg+xml'),
+            ('chapters/第一 章/images/图 1.PNG', b'PNG', 'image/png'),
+            ('封面 图.png', b'PNG', 'image/png'),
+        ]
+        for relative, data, content_type in fixtures:
+            with self.subTest(path=relative):
+                target = self.root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                status, body, headers = self.get_response(quote('/' + relative) + '?v=1')
+                self.assertEqual((status, body), (200, data))
+                self.assertEqual(headers['Content-Type'], content_type)
+                self.assertEqual(int(headers['Content-Length']), len(data))
+        self.assertEqual(self.get('/source/missing.png')[0], 404)
+
+    def test_non_image_files_are_not_served_as_static_assets(self):
+        for directory in ['', 'images', 'source', 'chapters/images']:
+            for name in ['private.txt', 'private.json', 'private.pdf', 'private.html',
+                         'private.js', 'private.css', 'private', 'a.png.txt']:
+                relative = '/'.join(filter(None, [directory, name]))
+                with self.subTest(path=relative):
+                    target = self.root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(b'PRIVATE')
+                    status, body = self.get('/' + relative)
+                    self.assertEqual(status, 404)
+                    self.assertNotIn(b'PRIVATE', body)
+
+    def test_nested_markdown_routes_still_render(self):
+        chapter = self.root / 'chapters' / '第一 章.md'
+        chapter.parent.mkdir()
+        chapter.write_text('# Chapter\n\n![图](images/a.png)', encoding='utf-8')
+        for relative in ['chapters/第一 章.md', 'chapters/第一 章']:
+            with self.subTest(path=relative):
+                status, body = self.get(quote('/' + relative))
+                self.assertEqual(status, 200)
+                self.assertIn(b'<h1>Chapter</h1>', body)
+                self.assertIn(b'src="images/a.png"', body)
+
     def test_traversal_rejected_for_all_routes(self):
         for route in ['../secret.md', '%2e%2e/secret.md', '..%5csecret.md',
                       '%2e%2e%5csecret.md', '%252e%252e%255csecret.md',
                       'C:%5csecret.md', '%00.md']:
-            for prefix in ['/', '/images/', '/katex-local/']:
+            for prefix in ['/', '/images/', '/source/', '/chapters/images/', '/katex-local/']:
                 with self.subTest(path=prefix + route):
                     status, body = self.get(prefix + route)
                     self.assertEqual(status, 403)
@@ -107,6 +156,33 @@ class PreviewTests(unittest.TestCase):
         except OSError:
             self.skipTest('Windows symlink permission unavailable')
         self.assertEqual(self.get('/outside.md')[0], 403)
+
+    def test_image_symlink_escape_if_supported(self):
+        outside = self.base / 'secret.png'
+        outside.write_bytes(b'PRIVATE')
+        source = self.root / 'source'
+        source.mkdir()
+        try:
+            (source / 'outside.png').symlink_to(outside)
+            (source / 'outside-dir').symlink_to(self.base, target_is_directory=True)
+        except OSError:
+            self.skipTest('Windows symlink permission unavailable')
+        for route in ['/source/outside.png', '/source/outside-dir/secret.png']:
+            with self.subTest(path=route):
+                status, body = self.get(route)
+                self.assertEqual(status, 403)
+                self.assertNotIn(b'PRIVATE', body)
+
+    def test_image_symlink_cannot_expose_non_image_file(self):
+        secret = self.root / 'private.txt'
+        secret.write_bytes(b'PRIVATE')
+        try:
+            (self.root / 'images' / 'alias.png').symlink_to(secret)
+        except OSError:
+            self.skipTest('Windows symlink permission unavailable')
+        status, body = self.get('/images/alias.png')
+        self.assertEqual(status, 404)
+        self.assertNotIn(b'PRIVATE', body)
 
     def test_shared_scanner_render_nodes_and_error_visibility(self):
         parser = MathNodes()
@@ -125,9 +201,12 @@ class PreviewTests(unittest.TestCase):
         if not node:
             self.skipTest('node unavailable')
         env = os.environ.copy()
-        modules = Path('C:/Users/Administrator/.agents/skills/doc-ocr-to-markdown/scripts/node_modules')
-        if modules.is_dir():
-            env['NODE_PATH'] = str(modules) + os.pathsep + env.get('NODE_PATH', '')
+        module_paths = [SCRIPTS / 'node_modules', SCRIPTS.parent / 'node_modules']
+        existing_paths = env.get('NODE_PATH', '').split(os.pathsep)
+        env['NODE_PATH'] = os.pathsep.join(
+            [str(path) for path in module_paths if path.is_dir()]
+            + [path for path in existing_paths if path]
+        )
         probe = subprocess.run([node, '-e', "require('katex')"], env=env, capture_output=True)
         if probe.returncode:
             self.skipTest('existing KaTeX unavailable')

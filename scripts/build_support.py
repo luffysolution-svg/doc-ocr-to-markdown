@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 
 
 OWNERSHIP = '.build-ownership.json'
-RESERVED = {OWNERSHIP, '00-目录.md', 'build-report.json', 'images'}
+RESERVED = {OWNERSHIP, '00-目录.md', 'build-report.json', 'images', 'agent'}
 
 
 def relative_name(value: str, *, component: bool = False) -> str:
@@ -94,7 +96,8 @@ def load_book(raw_root: Path, manifest: dict, sections: list[dict], pdf_path: Pa
     filenames = set()
     for sec in sections:
         filename = relative_name(sec.get('file', f"{sec['id']}.md"))
-        if Path(filename).suffix.lower() != '.md' or filename.split('/')[0] in RESERVED:
+        if (Path(filename).suffix.lower() != '.md'
+                or filename.split('/')[0].casefold() in {name.casefold() for name in RESERVED}):
             raise ValueError(f'章节文件名保留或无效: {filename}')
         if filename.casefold() in filenames:
             raise ValueError(f'章节文件名重复: {filename}')
@@ -133,13 +136,21 @@ class Publisher:
     Stale owned files are retained intentionally, including on --only runs.
     """
 
-    def __init__(self, root: Path, overwrite: bool = False):
+    def __init__(self, root: Path, overwrite: bool = False, state_root: Path | None = None):
         self.root = root
+        self.state_root = state_root if state_root is not None else root.parent / f'.{root.name}.build'
+        if (self.state_root.resolve().is_relative_to(root.resolve())
+                or root.resolve().is_relative_to(self.state_root.resolve())):
+            raise ValueError('构建状态与交付目录不得相互包含')
+        if self.state_root.is_symlink() or (hasattr(self.state_root, 'is_junction') and self.state_root.is_junction()):
+            raise ValueError('构建状态目录不能是链接')
         self.overwrite = overwrite
         self.owned = {}
         if root.is_symlink() or (hasattr(root, 'is_junction') and root.is_junction()):
             raise ValueError(f'输出目录不能是链接: {root}')
-        ledger = contained(root, OWNERSHIP)
+        ledger = contained(self.state_root, OWNERSHIP)
+        if not ledger.exists():
+            ledger = contained(root, OWNERSHIP)
         if ledger.exists():
             data = json.loads(ledger.read_text(encoding='utf-8'))
             if data.get('version') != 1 or not isinstance(data.get('files'), dict):
@@ -160,7 +171,9 @@ class Publisher:
         return path
 
     def previous_report(self) -> dict:
-        path = self.check('build-report.json')
+        path = contained(self.state_root, 'build-report.json')
+        if not path.exists():
+            path = self.check('build-report.json')
         if not path.exists():
             return {'chapters': [], 'review': {}}
         data = json.loads(path.read_text(encoding='utf-8'))
@@ -169,25 +182,86 @@ class Publisher:
         return data
 
     def publish(self, stage: Path) -> None:
+        report_path = stage / 'build-report.json'
+        report_data = report_path.read_bytes() if report_path.exists() else None
         files = {p.relative_to(stage).as_posix(): p.read_bytes()
-                 for p in stage.rglob('*') if p.is_file()}
+                 for p in stage.rglob('*') if p.is_file() and p != report_path}
+        # Check every ancestor before writing delivery files, including ancestors
+        # above a missing state_root (Path.exists() alone cannot detect those).
+        for directory in (self.root, self.state_root):
+            for parent in (directory, *directory.parents):
+                if parent.is_symlink() or (hasattr(parent, 'is_junction') and parent.is_junction()):
+                    raise ValueError(f'路径包含链接: {parent}')
+                if parent.exists() and not parent.is_dir():
+                    raise ValueError(f'父路径不是目录: {parent}')
+        state_targets = {name: contained(self.state_root, name)
+                         for name in (OWNERSHIP, 'build-report.json')}
+        for state_file in state_targets.values():
+            if state_file.exists() and not state_file.is_file():
+                raise ValueError(f'构建状态不是文件: {state_file}')
         targets = {name: self.check(name) for name in files}
         # Case-folded names also protect outputs when generated on Windows.
-        names = list(files)
-        if len({n.casefold() for n in names}) != len(names):
+        names = {name.casefold() for name in files}
+        if len(names) != len(files):
             raise ValueError('输出路径大小写冲突')
         for name, path in targets.items():
             for parent in path.parents:
-                if parent == self.root:
-                    break
                 if parent.exists() and not parent.is_dir():
                     raise ValueError(f'输出父路径不是目录: {parent}')
-            if any(other.startswith(name + '/') for other in files):
+            if any(other.startswith(name.casefold() + '/') for other in names):
                 raise ValueError(f'输出文件与目录冲突: {name}')
-        self.root.mkdir(parents=True, exist_ok=True)
-        for name, path in targets.items():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(files[name])
-            self.owned[name] = digest(files[name])
-        contained(self.root, OWNERSHIP).write_text(
-            json.dumps({'version': 1, 'files': self.owned}, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+        owned = {**self.owned, **{name: digest(data) for name, data in files.items()}}
+        writes = [(targets[name], data) for name, data in files.items()]
+        if report_data is not None:
+            writes.append((state_targets['build-report.json'], report_data))
+        ledger_data = (json.dumps({'version': 1, 'files': owned},
+                                  ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        writes.append((state_targets[OWNERSHIP], ledger_data))
+        # Keep just the required original bytes; staged payloads above are reused.
+        originals = {path: path.read_bytes() if path.exists() else None for path, _ in writes}
+        attempted = []
+        created_dirs = []
+
+        def make_parents(directory: Path) -> None:
+            missing = []
+            while not directory.exists():
+                missing.append(directory)
+                directory = directory.parent
+            for directory in reversed(missing):
+                directory.mkdir()
+                created_dirs.append(directory)
+
+        def replace_bytes(path: Path, data: bytes) -> None:
+            fd, temporary = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(data)
+                os.replace(temporary, path)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+
+        try:
+            for path, data in writes:
+                make_parents(path.parent)
+                attempted.append(path)
+                replace_bytes(path, data)
+        except BaseException as error:
+            rollback_errors = []
+            for path in reversed(attempted):
+                try:
+                    if originals[path] is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        replace_bytes(path, originals[path])
+                except BaseException as rollback_error:
+                    rollback_errors.append(rollback_error)
+            for directory in reversed(created_dirs):
+                try:
+                    directory.rmdir()  # Only our own empty directories; never recurse.
+                except OSError:
+                    pass
+            if rollback_errors:
+                raise RuntimeError(f'发布失败且部分文件恢复失败: {rollback_errors}') from error
+            raise
+        self.owned = owned
