@@ -24,7 +24,7 @@ GREEK = {
 MISC = {r'\circ': '°', r'\times': '×', r'\cdot': '·', r'\pm': '±', r'\approx': '≈',
         r'\geq': '≥', r'\leq': '≤', r'\infty': '∞', r'\sim': '∼', r'\rightarrow': '→'}
 # Match a COMPLETE control word; never split a prefix of a valid macro.
-STUCK_COMMANDS = re.compile(r'\\(?:vertHg|cdotkg)(?![A-Za-z])')
+STUCK_COMMANDS = re.compile(r'\\(?:vert(?:Hg|[A-Za-z])|cdotkg)(?![A-Za-z])')
 TEXT_GROUP = re.compile(r'\\(?:text[a-zA-Z]*|mbox|hbox|operatorname)\*?\s*\{')
 
 
@@ -243,7 +243,12 @@ INLINE_MATH = _MathPattern(inline=True)
 
 
 def _fix_stuck_commands(text: str) -> str:
-    return STUCK_COMMANDS.sub(lambda m: {r'\vertHg': r'\vert Hg', r'\cdotkg': r'\cdot kg'}[m[0]], text)
+    def _repl(m: re.Match) -> str:
+        s = m[0]
+        if s.startswith(r'\vert'):
+            return r'\vert ' + s[5:]
+        return r'\cdot kg'
+    return STUCK_COMMANDS.sub(_repl, text)
 
 
 def _dedup_tags(text: str) -> str:
@@ -295,6 +300,14 @@ def normalize_math(text: str) -> str:
                 out.append('{\\' + name + '{' + normalize_math(text[pos + scoped.end():end - 1]) + '}}')
                 pos = end
                 continue
+        if text.startswith('<<', pos) and not escaped(text, pos):
+            out.append(r'\ll ')
+            pos += 2
+            continue
+        if text.startswith('>>', pos) and not escaped(text, pos):
+            out.append(r'\gg ')
+            pos += 2
+            continue
         if text[pos] == '<' and not escaped(text, pos):
             out.append(r'\lt' if pos + 1 < len(text) and text[pos + 1].isspace() else r'\lt ')
             pos += 1
@@ -305,7 +318,7 @@ def normalize_math(text: str) -> str:
             continue
         out.append(text[pos])
         pos += 1
-    return ''.join(out)
+    return _dedup_tags(''.join(out))
 
 
 def _math_skeleton(body: str, include_text: bool = False) -> str:

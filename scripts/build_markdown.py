@@ -238,7 +238,9 @@ def table_markdown(html: str, store: FigureStore | None = None, ocr_dir: Path | 
         from bs4 import BeautifulSoup
     except ImportError as exc:
         raise RuntimeError('需要 beautifulsoup4 转换表格') from exc
-    soup = BeautifulSoup(html, 'html.parser')
+    # 保护单元格公式中的 < 和 >，避免被 HTML 解析器当作未闭合标签吞噬（如 $x << R_c$）
+    safe_html = re.sub(r'(\$[^$]+\$)', lambda m: m.group(1).replace('<', '&lt;').replace('>', '&gt;'), html)
+    soup = BeautifulSoup(safe_html, 'html.parser')
     table = soup.find('table')
     if not table:
         return ''

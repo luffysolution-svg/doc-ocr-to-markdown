@@ -84,6 +84,13 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(r['status'], 'pass', r)
         self.assertEqual(r['errors'], [])
 
+    def test_chemical_state_notation_not_mistaken_for_link(self):
+        self.note('# Note\n\n![a](images/a.png)\n\n'
+                  'Pt(s)|K3[Fe(CN)6](aq), K4[Fe(CN)6](aq)||Mn2+(aq)\n')
+        r = self.report()
+        self.assertEqual(r['status'], 'pass', r)
+        self.assertEqual(r['errors'], [])
+
     def test_closed_fences_in_containers_are_allowed(self):
         self.note('# Note\n\n> ```markdown\n> ![example](missing.png)\n> ```\n\n![a](images/a.png)\n')
         r = self.report()

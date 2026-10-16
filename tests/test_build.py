@@ -733,6 +733,12 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             asset_path(self.raw, 'link.png')
 
+    def test_table_markdown_protects_inequalities(self):
+        html = '<table><tr><td>Restoring force</td><td>$x << R_c$</td><td>$A < B$</td></tr></table>'
+        res = build.table_markdown(html)
+        self.assertIn('$x << R_c$', res)
+        self.assertIn('$A < B$', res)
+
 
 if __name__ == '__main__':
     unittest.main()

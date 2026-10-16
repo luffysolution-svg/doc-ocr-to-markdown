@@ -122,6 +122,12 @@ class MathTests(unittest.TestCase):
     def test_plain_symbols_match_complete_control_words(self):
         self.assertEqual(plain_text(r'\subseteq \infty \neq'), 'subseteq ∞ neq')
 
+    def test_stuck_vert_and_inequalities_normalized(self):
+        self.assertEqual(normalize_math(r'\vertz_+ z_-\vert'), r'\vert z_+ z_-\vert')
+        self.assertEqual(normalize_math(r'\vertj_1 - j_2\vert'), r'\vert j_1 - j_2\vert')
+        self.assertEqual(normalize_math(r'x << R_c'), r'x \ll  R_c')
+        self.assertEqual(normalize_math(r'x >> y'), r'x \gg  y')
+
     def test_extractor_shared_semantics_and_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -144,6 +144,8 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
                         errors.append(f'{name}: 图片路径越出知识库 {dest}')
                         continue
                 if not target.exists():
+                    if child.type == 'link_open' and decoded.lower() in ('aq', 's', 'l', 'g', 'sln', 'cr'):
+                        continue
                     errors.append(f'{name}: 链接失效 {dest}')
                     continue
                 if child.type == 'image':

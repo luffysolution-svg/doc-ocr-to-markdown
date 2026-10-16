@@ -43,6 +43,7 @@ python scripts/mineru_ocr.py split <源PDF路径> --out-root ./ocr-work --chunk-
 python scripts/mineru_ocr.py submit --out-root ./ocr-work --id-file ./ocr-work/ids.tsv
 ```
 
+- **外文/英文教材**：须显式传入 `--language en`；MinerU 云端 VLM 模型会切换为英文词表与语法对齐，避免模型尝试按中文字符纠偏而产生拼写误伤。
 - **坐标系统**：本工具读取的 `content_list.json` 使用 **0–1000 归一化坐标**，裁图时按实际页面宽高换算；`layout.json` 的页面点坐标须先按该页宽高归一化，不能混用或写死整本书尺寸。定位图题时使用 layout 中题注本身的框，不能用所属图块框代替（见 `references/mineru-api.md`）。
 - **网络回退**：若遇 `cdn-mineru.openxlab.org.cn` TLS 握手 EOF，脚本已内置公共 DoH 获取真实 IP 并使用 `curl --resolve` 绕过 fake-IP 劫持（详见 `references/mineru-api.md`）。
 
@@ -68,9 +69,10 @@ OCR 会出现形近字、同音字或英文字母误识（如“轫致辐射”�
 
 所有公式转为 Obsidian 兼容的 LaTeX（行内 `$...$`，独立行 `$$...$$`）。核心规则（见 `references/math-normalization.md`）：
 - 中文放进 `\text{}`，化学式放进 `\mathrm{}`；
-- 数学不等号转义：公式中的 `<` 和 `>` 自动转义为 `\lt ` 与 `\gt `，杜绝 CommonMark/Obsidian 引擎将其误识别为 HTML 标签而破坏定界符；
+- 数学不等号转义：公式中的 `<` 和 `>` 自动转义为 `\lt ` 与 `\gt `，`<<` 和 `>>` 转义为 `\ll ` 与 `\gg `，表格内公式预先实体化转义，杜绝 BeautifulSoup / CommonMark / Obsidian 引擎将其误识别为 HTML 标签而破坏定界符与表格列；
 - 保留文本分组语义；有歧义的嵌套分组和标点回源确认后再修；
-- 修复粘连命令：`\vertHg` → `\vert Hg`，`\cdotkg` → `\cdot kg`；
+- 修复粘连命令：`\vert` 与变量字母粘连（如 `\vertz` → `\vert z`、`\vertj` → `\vert j`、`\vertHg` → `\vert Hg`），`\cdotkg` → `\cdot kg`；
+- 化学配离子与物态消歧：涉及 `[Fe(CN)6](aq)` 等配合物物态时，正文中统一放入 `$\mathrm{...}$` 环境，避免 CommonMark 将 `[配合物](aq)` 误贪婪匹配为超链接；校验器内置化学常见物态（`aq`, `s`, `l`, `g`, `sln`, `cr`）保护规则；
 - 化学下标处于文本模式时，核对后用数学模式保留其下标，例如 `\text{NH_4Cl}` → `\mathrm{NH_4Cl}`；
 - 多重式号、未知命令、化学结构及跨正文括号须回看原页确认，通过 `--repairs` 显式应用，不自动猜测编号或物理含义；
 - 编译通过只证明语法可接受；二维结构失真时保留原版裁图。
