@@ -1,6 +1,6 @@
 ---
 name: wusen-paper-reader
-description: 解读已有论文、补充材料和解析后的 Markdown，完成单篇精读、跨文献比较、跨学科方法迁移、跨主题综合及有出处的知识库问答。支持图文对照证据链预览（折叠抽屉与双链悬停）、实验复现SOP配方卡导出、Mermaid机制流程图渲染、50+页SI轻量级定向探针穿透、催化性能Benchmark横向入库与Zotero学术标签自动增强。用户要求读懂论文、解释图表与机理、核对创新点和证据、整理复现参数、比较研究结论、把文献连接到课题或整理 Obsidian 阅读笔记时使用。优先针对材料与化学，按需检查合成表征、催化电化学、DFT计算、光谱机理和性能可比性。区分作者报告、解读与研究假设，保留原文定位和缺失信息；不依赖其他科研 Skill。
+description: 解读已有论文、补充材料和解析后的 Markdown，完成单篇精读、跨文献比较、跨学科方法迁移、跨主题综合及有出处的知识库问答。支持子图精准切片（Sub-figure Crop）、50+页SI附图高清抽离与定向探针穿透、图文对照证据链预览（折叠抽屉与双链悬停）、实验复现SOP配方卡导出、Mermaid机制流程图防错渲染、催化性能Benchmark横向入库与Zotero学术标签自动增强。用户要求读懂论文、解释图表与机理、核对创新点和证据、整理复现参数、比较研究结论、把文献连接到课题或整理 Obsidian 阅读笔记时使用。优先针对材料与化学，按需检查合成表征、催化电化学、DFT计算、光谱机理和性能可比性。区分作者报告、解读与研究假设，保留原文定位和缺失信息；不依赖其他科研 Skill。
 ---
 
 # 文献解读（wusen-paper-reader）
@@ -81,13 +81,17 @@ Zotero 操作使用宿主支持的工具或已验证的只读导出接口，不�
 python scripts/evidence_tools.py inventory ./sources --out ./work/sources.json
 python scripts/evidence_tools.py check ./work/evidence.json --root ./sources --out ./work/check.json
 
-# 2. 50+ 页补充材料 (SI) 极速定向透视
+# 2. 50+ 页补充材料 (SI) 极速定向透视与附图全量高清抽离
 python scripts/si_probe.py ./sources/paper-SI.pdf [--search "TEOA,xenon,Hubbard"]
+python scripts/extract_si_figures.py ./sources/paper-SI.pdf --out-dir ./images/SI
 
-# 3. 性能 Benchmark 横向入库
+# 3. 大图子面板精准切片 (Sub-figure Crop)
+python scripts/crop_subfigures.py ./images/master_fig.png --out-dir ./images/subfigures --spec-json ./crops.json
+
+# 4. 性能 Benchmark 横向入库
 python scripts/benchmark_collector.py add ./benchmarks.csv --json-entry '{"doi":"...","activity_rate":"10.7"}'
 
-# 4. 离线工具自动化测试
+# 5. 离线工具自动化测试
 python -m unittest discover -s tests -v
 ```
 

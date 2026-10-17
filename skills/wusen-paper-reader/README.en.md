@@ -78,17 +78,21 @@ From the skill directory:
 python scripts/evidence_tools.py inventory ./sources --out ./work/sources.json
 python scripts/evidence_tools.py check ./work/evidence.json --root ./sources --out ./work/check.json
 
-# 2. 50+ page SI Fast-Probe (instant parameter penetration)
+# 2. 50+ page SI Fast-Probe & high-res figure extraction (Figures S1-S36)
 python scripts/si_probe.py ./sources/paper-SI.pdf --search "TEOA,xenon,Hubbard"
+python scripts/extract_si_figures.py ./sources/paper-SI.pdf --out-dir ./images/SI
 
-# 3. Cross-literature catalytic benchmark logging
+# 3. Precision subfigure cropping (Sub-figure Crop)
+python scripts/crop_subfigures.py ./images/master_fig.png --out-dir ./images/subfigures --spec-json ./crops.json
+
+# 4. Cross-literature catalytic benchmark logging
 python scripts/benchmark_collector.py add ./benchmarks.csv --json-entry '{"doi":"10.1002/adma.202313513","activity_rate":"10.71"}'
 
-# 4. Offline test suite
+# 5. Offline test suite
 python -m unittest discover -s tests -v
 ```
 
-`inventory` records Markdown paths, hashes, titles, and headings. After reading, populate the evidence ledger using the [evidence contract](references/evidence-contract.md). `check` validates structure, path boundaries, source hashes, and quoted text. It makes no network or model calls. Conflicting existing outputs are rejected; use new filenames for revisions. `si_probe.py` penetrates multi-page Supporting Information documents without heavy cloud OCR pipelines. `benchmark_collector.py` deduplicates and records catalytic performance data across papers.
+`inventory` records Markdown paths, hashes, titles, and headings. After reading, populate the evidence ledger using the [evidence contract](references/evidence-contract.md). `check` validates structure, path boundaries, source hashes, and quoted text. It makes no network or model calls. Conflicting existing outputs are rejected; use new filenames for revisions. `si_probe.py` and `extract_si_figures.py` penetrate multi-page Supporting Information documents and extract high-resolution figures without heavy cloud OCR pipelines. `crop_subfigures.py` crops multi-panel scientific figures into focused subfigures. `benchmark_collector.py` deduplicates and records catalytic performance data across papers.
 
 ## Document and library integration
 

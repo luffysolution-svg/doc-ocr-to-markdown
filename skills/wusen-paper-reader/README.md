@@ -76,17 +76,21 @@ npx skills add luffysolution-svg/wusen-skills --skill wusen-paper-reader -g
 python scripts/evidence_tools.py inventory ./sources --out ./work/sources.json
 python scripts/evidence_tools.py check ./work/evidence.json --root ./sources --out ./work/check.json
 
-# 2. 50+ 页 SI 轻量定向探针（毫秒级提取合成、催化、DFT 参数与图表）
+# 2. 50+ 页 SI 轻量定向探针与附图 (Figure S1-S36) 高清原图全量抽离
 python scripts/si_probe.py ./sources/paper-SI.pdf --search "TEOA,xenon,Hubbard"
+python scripts/extract_si_figures.py ./sources/paper-SI.pdf --out-dir ./images/SI
 
-# 3. 性能 Benchmark 结构化横向入库
+# 3. 大图子面板精准切片 (Sub-figure Crop)
+python scripts/crop_subfigures.py ./images/master_fig.png --out-dir ./images/subfigures --spec-json ./crops.json
+
+# 4. 性能 Benchmark 结构化横向入库
 python scripts/benchmark_collector.py add ./benchmarks.csv --json-entry '{"doi":"10.1002/adma.202313513","activity_rate":"10.71"}'
 
-# 4. 全套离线自动化测试
+# 5. 全套离线自动化测试
 python -m unittest discover -s tests -v
 ```
 
-`inventory` 发现Markdown并记录相对路径、哈希、标题与章节。阅读后按 [证据契约](references/evidence-contract.md) 填写 `evidence.json`。`check` 检查字段、路径边界、哈希与正文引文；不联网，也不自动生成科学结论。输出文件内容不同时拒绝覆盖，修订时使用新文件名。`si_probe.py` 利用轻量本地解析快速透视几十页的复杂补充材料，无需重量级云端 OCR。`benchmark_collector.py` 实现多文献催化数据的标准化去重录入与 Markdown 汇总导出。
+`inventory` 发现Markdown并记录相对路径、哈希、标题与章节。阅读后按 [证据契约](references/evidence-contract.md) 填写 `evidence.json`。`check` 检查字段、路径边界、哈希与正文引文；不联网，也不自动生成科学结论。输出文件内容不同时拒绝覆盖，修订时使用新文件名。`si_probe.py` 与 `extract_si_figures.py` 利用轻量本地解析快速透视并完整提取几十页补充材料的参数与附图，无需重量级云端 OCR。`crop_subfigures.py` 支持按坐标将复合多面板大图裁切为聚焦子图，实现阅读过程中的精准图文对齐。`benchmark_collector.py` 实现多文献催化数据的标准化去重录入与 Markdown 汇总导出。
 
 ## 与解析工具衔接
 

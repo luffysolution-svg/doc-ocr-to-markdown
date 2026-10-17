@@ -82,14 +82,25 @@
 - **连线文本防错规范**：连线标签（`-->|...|`）若含英文圆括号 `()`、冒号 `:`、斜杠或特殊符号，必须加双引号（如 `-->|"文本 (含参数)"|`），严禁裸括号导致解析器报 `got 'PS'` 语法崩溃；拆解多节点 `&` 连线为单边连线以确保各版本兼容；
 - 清晰表达：`光激发 → 载流子分离与迁移 → 助催化剂界面捕获 → 表面催化反应 / 反应物吸附与脱附`。
 
-### 4. SI 定向透视与参数穿透（SI Fast-Probe）
+### 4. SI 定向透视与附图全量抽离（SI Fast-Probe & Extractor）
 对 50+ 页的复杂补充材料无需做重量级云端 OCR，利用离线工具快速索引与提取：
 ```bash
+# 文本与参数定向探测
 python scripts/si_probe.py ./path/to/paper-SI.pdf --search "TEOA,xenon,Hubbard"
-```
-快速获取合成试剂来源、电化学三电极电解液参数、气相色谱定量校准细节与同类催化剂横向对比表（Table S）。
 
-### 5. Benchmark 结构化入库与 Zotero 学术标签增强
+# 补充材料附图 (Figure S1-S36) 高清原图全量抽离
+python scripts/extract_si_figures.py ./path/to/paper-SI.pdf --out-dir ./images/SI
+```
+快速获取合成试剂来源、电化学三电极电解液参数、气相色谱定量校准细节与同类催化剂横向对比表（Table S），并将所有 SI 附图独立归档供知识库引用。
+
+### 5. 子图精准切片（Sub-figure Crop）
+多子面板复合大图（如 Figure 1 包含 a-i）可在解读具体分节时进行精准切片隔离：
+```bash
+python scripts/crop_subfigures.py ./images/master_fig.png --out-dir ./images/subfigures --spec-json ./crops.json
+```
+看哪一段分析就放哪一张小图（如 3.1 节放 Figure 1b XRD 单图，3.2 节放 Figure 1e 球差电镜单图），视觉焦点不分散。
+
+### 6. Benchmark 结构化入库与 Zotero 学术标签增强
 - **基准入库**：单篇解读完成后，提炼核心性能字段追加写入 `benchmarks.csv`，便于后续跨文献横向分析；
 - **Zotero 学术标签**：根据解析出的体系与反应，为文献打上结构化学术标签（如 `#光催化/产氢`, `#助催化剂/Ni-NiOx`, `#机理/FLPs`, `#AQY/40.8%`），增强知识库检索能力。
 
