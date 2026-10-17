@@ -86,21 +86,19 @@ Interprets papers, supporting information, Zotero attachments, and Markdown note
 
 [Explore the full guide and examples →](skills/sanmu-paper-reader/README.en.md)
 
-[Explore the full guide and examples →](skills/wusen-paper-reader/README.en.md) · [Browse the benchmark showcase →](skills/wusen-paper-reader/examples/Yang-et-al-2024-Advanced-Materials/README.md)
-
 ## Usage
 
 After installation, describe your task in an AI assistant that supports Agent Skills. For example:
 
 > Turn this scanned textbook into a Markdown knowledge base, organized by chapter. Preserve formulas and high-resolution figures, and validate the complete output.
 
-Each skill's guide documents its runtime and input requirements. `wusen-doc2md` requires Python and KaTeX; cloud OCR also requires MinerU credentials. Follow [Installation and dependencies](skills/wusen-doc2md/README.en.md#installation-and-dependencies), then run `scripts/doctor.py` to check your environment.
+Each skill's guide documents its runtime and input requirements. `sanmu-doc2md` requires Python and KaTeX; cloud OCR also requires MinerU credentials. Follow [Installation and dependencies](skills/sanmu-doc2md/README.en.md#installation-and-dependencies), then run `scripts/doctor.py` to check your environment.
 
 ### Discover and update
 
 ```bash
 # List the skills in this collection
-npx skills add luffysolution-svg/wusen-skills --list
+npx skills add luffysolution-svg/sanmu-skills --list
 
 # Update installed skills
 npx skills update
@@ -109,30 +107,30 @@ npx skills update
 ### Manual installation
 
 ```bash
-git clone https://github.com/luffysolution-svg/wusen-skills.git
+git clone https://github.com/luffysolution-svg/sanmu-skills.git
 ```
 
-Copy or link the complete skill directory from `skills/` into your assistant's skill directory, such as `~/.agents/skills/wusen-doc2md`. Keep the scripts, references, and examples together.
+Copy or link the complete skill directory from `skills/` into your assistant's skill directory, such as `~/.agents/skills/sanmu-doc2md`. Keep the scripts, references, and examples together.
 
 ## Contributing
 
-Use [GitHub Issues](https://github.com/luffysolution-svg/wusen-skills/issues) to report problems, share reproducible cases, or suggest improvements. Pull requests are welcome.
+Use [GitHub Issues](https://github.com/luffysolution-svg/sanmu-skills/issues) to report problems, share reproducible cases, or suggest improvements. Pull requests are welcome.
 
 Place each skill under `skills/<skill-name>/`, with a matching name in `SKILL.md`. Preserve the practical guidance in existing skills and keep changes focused on the issue being addressed.
 
-Validate `wusen-doc2md`:
+Validate `sanmu-doc2md`:
 
 ```bash
-python -m pip install -r skills/wusen-doc2md/requirements.txt
-npm --prefix skills/wusen-doc2md/scripts install --ignore-scripts --no-audit --no-fund
-python -m unittest discover -s skills/wusen-doc2md/tests -v
-python skills/wusen-doc2md/scripts/doctor.py
+python -m pip install -r skills/sanmu-doc2md/requirements.txt
+npm --prefix skills/sanmu-doc2md/scripts install --ignore-scripts --no-audit --no-fund
+python -m unittest discover -s skills/sanmu-doc2md/tests -v
+python skills/sanmu-doc2md/scripts/doctor.py
 ```
 
-Validate `wusen-paper-reader` (Python 3.10+, no third-party dependencies):
+Validate `sanmu-paper-reader` (Python 3.10+, no third-party dependencies):
 
 ```bash
-python -m unittest discover -s skills/wusen-paper-reader/tests -v
+python -m unittest discover -s skills/sanmu-paper-reader/tests -v
 ```
 
 ## License
