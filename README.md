@@ -106,12 +106,33 @@ examples/
 
 ## 安装与依赖
 
+### 方式一：让 AI 助手为你一键安装配置（推荐）
+
+如果你正在使用 **Claude Code**、**ZCode**、**Cursor**、**Windsurf**、**OpenCode** 或 **Codex** 等 AI 编码助手，可直接复制以下提示词发送给它，全自动搞定克隆、依赖与环境校验：
+
+> **📋 发给 AI 助手的安装指令（复制下方内容即可）：**
+>
+> ```text
+> 请帮我安装并配置 doc-ocr-to-markdown 技能：
+> 1. 检查并克隆仓库到我的技能目录（全局 ~/.agents/skills/doc-ocr-to-markdown 或当前项目 .agents/skills/doc-ocr-to-markdown）：
+>    git clone https://github.com/luffysolution-svg/doc-ocr-to-markdown.git ~/.agents/skills/doc-ocr-to-markdown
+> 2. 安装 Python 依赖：
+>    pip install -r ~/.agents/skills/doc-ocr-to-markdown/requirements.txt
+> 3. 安装 Node.js 校验依赖（用于 KaTeX 100% 公式全量编译门禁）：
+>    npm install katex
+> 4. 运行自带的自动化测试套件验证安装完整性：
+>    pytest -q ~/.agents/skills/doc-ocr-to-markdown/tests
+> 5. 提示我检查或配置 MINERU_API_TOKEN 环境变量。
+> ```
+
+### 方式二：手动快速安装
+
 ```bash
 # 1. 克隆至技能目录（以全局技能目录为例）
 git clone https://github.com/luffysolution-svg/doc-ocr-to-markdown ~/.agents/skills/doc-ocr-to-markdown
 
 # 2. Python 依赖
-pip install -r requirements.txt
+pip install -r ~/.agents/skills/doc-ocr-to-markdown/requirements.txt
 
 # 3. Node.js 依赖（用于 KaTeX 100% 公式全量编译门禁）
 npm install katex
