@@ -80,11 +80,12 @@ npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
 面向已有论文、SI、Zotero 附件与解析后的 Markdown，支持深入精读与知识积累，重点对齐证据边界与实验条件。
 
 - **按场景分层**：支持单篇精读、跨文献对比、跨学科迁移、跨主题综合与知识库问答五大场景。
-- **严谨证据核对**：区分观测事实、作者推断与假设，保留测试条件、误差定义与未获取项。
-- **材料与化学优化**：针对合成表征、催化电化学、DFT计算、光谱机理和性能比较定制检查规则。
-- **离线证据工具**：内置标准库校验脚本，支持引用原文与哈希核验，保护个人文献隐私。
+- **图文对照与子图切片**：提供 Obsidian 悬停气泡预览、折叠抽屉 Callout 与单面板精准切片，阅读文字即刻核验谱图。
+- **实验复现 SOP 与配方卡**：提取毫克级投料、溶剂体积、升温退火曲线、反应液配比与已知复现缺口。
+- **原生 Mermaid 机制流与 SI 探针**：零报错渲染能带电荷流与 FLPs 水分子极化；毫秒级穿透 50+ 页 SI 并全量提取高清附图。
+- **基准入库与学术标签**：自动提取核心催化指标追加录入 `benchmarks.csv`，并同步反哺 Zotero 学术标签。
 
-[查看完整说明与案例 →](skills/wusen-paper-reader/README.md)
+[查看使用指南与完整效果展示 →](skills/wusen-paper-reader/README.md) · [直接浏览顶刊精读样本 →](skills/wusen-paper-reader/examples/Yang-et-al-2024-Advanced-Materials/README.md)
 
 ## 使用说明
 

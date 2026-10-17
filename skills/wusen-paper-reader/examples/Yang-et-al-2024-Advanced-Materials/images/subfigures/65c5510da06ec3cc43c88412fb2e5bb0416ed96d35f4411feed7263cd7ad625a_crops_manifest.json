@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Figure_2d_e_EPR",
+    "filename": "Figure_2d_e_EPR.png",
+    "path": "F:\\个人知识库\\知识库\\04-科研学术\\Yang 等 - 2024 - Unveiling the Synergistic Role of Frustrated Lewis Pairs in Carbon-Encapsulated Ni_NiOx Photothermal\\images\\subfigures\\Figure_2d_e_EPR.png",
+    "relative_path": "Figure_2d_e_EPR.png",
+    "width": 383,
+    "height": 236,
+    "box": [
+      0.48,
+      0.0,
+      1.0,
+      0.67
+    ],
+    "description": "EPR 定量电子顺磁共振谱 (Vo 与 VNi 空位)"
+  },
+  {
+    "name": "Figure_2f_XAS",
+    "filename": "Figure_2f_XAS.png",
+    "path": "F:\\个人知识库\\知识库\\04-科研学术\\Yang 等 - 2024 - Unveiling the Synergistic Role of Frustrated Lewis Pairs in Carbon-Encapsulated Ni_NiOx Photothermal\\images\\subfigures\\Figure_2f_XAS.png",
+    "relative_path": "Figure_2f_XAS.png",
+    "width": 190,
+    "height": 236,
+    "box": [
+      0.48,
+      0.67,
+      1.0,
+      1.0
+    ],
+    "description": "同步辐射 XANES 吸收边结构"
+  }
+]

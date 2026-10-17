@@ -9,11 +9,28 @@
 
 [简体中文](README.md) · **English**
 
-[Installation](#installation) · [Scenarios](#scenarios) · [Domain checks](#materials-and-chemistry) · [Validation](#validation-and-limits)
+[Installation](#installation) · [Scenarios](#scenarios) · [Showcase](#showcase) · [Domain checks](#materials-and-chemistry) · [Validation](#validation-and-limits)
 
 </div>
 
 Interpret papers, supporting information, Zotero attachments, and existing Markdown through single-paper reading, cross-paper comparison, interdisciplinary transfer, cross-topic synthesis, and evidence-grounded library questions. Features visual evidence preview (collapsible Callouts & hover previews), experimental replication protocols (SOPs), native Mermaid mechanism flowcharts, rapid SI fast-probe parameter penetration, cross-literature benchmark logging, and Zotero academic tagging. Preserve experimental conditions, uncertainties, and the distinction between reported findings and new hypotheses.
+
+## Showcase
+
+Using a research article published in *Advanced Materials* (2024, 36, 2313513) on photocatalytic hydrogen evolution as a benchmark example:
+
+- 📝 **[Deep Academic Reading Notes (Core Deliverable) →](examples/Yang-et-al-2024-Advanced-Materials/Yang%20%E7%AD%89%20-%202024%20-%20Unveiling%20the%20Synergistic%20Role%20of%20Frustrated%20Lewis%20Pairs%20in%20Carbon-Encapsulated%20Ni_NiOx%20Photothermal%20-%20%E8%A7%A3%E8%AF%BB.md)**
+- 📂 **[Browse Complete Deliverables & Image Gallery →](examples/Yang-et-al-2024-Advanced-Materials/README.md)**
+
+<details>
+<summary><b>Click to expand showcase feature highlights</b></summary>
+
+- **Visual Evidence Chain**: bidirectional hover previews (`↗`), Obsidian collapsible drawers (`> [!example]-`), and cropped subfigures;
+- **Replication Protocol (SOP Recipe Card)**: precise reagent weights, solvent volumes, Ar tube furnace ramps, and reproducibility warnings;
+- **Native Mermaid Mechanism Flow**: zero-error flowchart rendering carrier dynamics and bipolar FLPs;
+- **SI Penetration & High-Res Gallery**: [36 full-resolution SI figures](examples/Yang-et-al-2024-Advanced-Materials/images/SI/) and Table S3 cross-catalyst benchmarks;
+- **Original Academic Markdown**: [100% KaTeX validated formulas](examples/Yang-et-al-2024-Advanced-Materials/Yang%20%E7%AD%89%20-%202024%20-%20Unveiling%20the%20Synergistic%20Role%20of%20Frustrated%20Lewis%20Pairs%20in%20Carbon-Encapsulated%20Ni_NiOx%20Photothermal.md).
+</details>
 
 ## Installation
 

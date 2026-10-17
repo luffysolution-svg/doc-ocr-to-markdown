@@ -84,7 +84,7 @@ Interprets papers, supporting information, Zotero attachments, and Markdown note
 - **Materials and chemistry checks**: specialized domain rules for synthesis and characterization, catalysis and electrochemistry, DFT computation, spectroscopy mechanisms, and performance benchmarks.
 - **Offline evidence verification**: standard-library Python tools to verify source hashes and quoted text without exposing private documents to external networks.
 
-[Explore the full guide and examples →](skills/wusen-paper-reader/README.en.md)
+[Explore the full guide and examples →](skills/wusen-paper-reader/README.en.md) · [Browse the benchmark showcase →](skills/wusen-paper-reader/examples/Yang-et-al-2024-Advanced-Materials/README.md)
 
 ## Usage
 

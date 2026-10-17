@@ -9,11 +9,28 @@
 
 **简体中文** · [English](README.en.md)
 
-[安装](#安装) · [使用场景](#使用场景) · [学科检查](#材料与化学的五类检查) · [验证范围](#验证与限制)
+[安装](#安装) · [使用场景](#使用场景) · [效果展示](#完整效果展示) · [学科检查](#材料与化学的五类检查) · [验证范围](#验证与限制)
 
 </div>
 
 面向已有论文、SI、Zotero附件与解析后的Markdown，支持单篇精读、跨文献对比、跨学科迁移、跨主题综合和知识库问答。核心是把论断链接到已读的证据，并保留条件、局限和研究疑问。内置图文对照证据链预览（折叠 Callout 与双链悬停）、实验复现 SOP 配方卡导出、Mermaid 机理流程图、50+ 页 SI 轻量定向探针穿透、催化性能 Benchmark 横向入库及 Zotero 学术标签增强。
+
+## 完整效果展示
+
+以发表在顶级材料期刊 *Advanced Materials* (2024, 36, 2313513) 的光催化产氢论文为例：
+
+- 📝 **[查看深度学术精读笔记（核心产物） →](examples/Yang-et-al-2024-Advanced-Materials/Yang%20%E7%AD%89%20-%202024%20-%20Unveiling%20the%20Synergistic%20Role%20of%20Frustrated%20Lewis%20Pairs%20in%20Carbon-Encapsulated%20Ni_NiOx%20Photothermal%20-%20%E8%A7%A3%E8%AF%BB.md)**
+- 📂 **[浏览效果演示完整目录与图库（含原文、SOP、图库与导航） →](examples/Yang-et-al-2024-Advanced-Materials/README.md)**
+
+<details>
+<summary><b>点击展开查看效果展示核心亮点清单</b></summary>
+
+- **图文对照与子图切片**：正文双链气泡悬停（`↗`）、Obsidian 原生折叠抽屉（`> [!example]-`）与独立切片小图；
+- **实验复现 SOP 与配方卡**：毫克级称量、溶剂用量、Ar 升温退火曲线与反应测试工况；
+- **原生 Mermaid 机制图**：零报错渲染载流子传输与 FLPs 水分子极化；
+- **SI 50+ 页透视与图库**：[36 幅 SI 附图全量高清提取](examples/Yang-et-al-2024-Advanced-Materials/images/SI/) 与 Table S3 性能横向对比；
+- **学术原文 Markdown**：[100% KaTeX 公式保真与高清图表](examples/Yang-et-al-2024-Advanced-Materials/Yang%20%E7%AD%89%20-%202024%20-%20Unveiling%20the%20Synergistic%20Role%20of%20Frustrated%20Lewis%20Pairs%20in%20Carbon-Encapsulated%20Ni_NiOx%20Photothermal.md)。
+</details>
 
 ## 安装
 
