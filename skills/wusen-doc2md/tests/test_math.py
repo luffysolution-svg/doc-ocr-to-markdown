@@ -208,7 +208,7 @@ class KatexTests(unittest.TestCase):
         if not cls.node:
             raise unittest.SkipTest('node is unavailable')
         cls.env = os.environ.copy()
-        existing = Path('C:/Users/Administrator/.agents/skills/doc-ocr-to-markdown/scripts/node_modules')
+        existing = SCRIPTS / 'node_modules'
         if existing.is_dir():
             cls.env['NODE_PATH'] = str(existing) + os.pathsep + cls.env.get('NODE_PATH', '')
         probe = subprocess.run([cls.node, '-e', "require('katex')"], env=cls.env, capture_output=True)

@@ -46,7 +46,7 @@ $$
 
 `manifest.json` 将两页各作为一个分片，`chapters.json` 将它们装成一个内容文件。物理页码从 1 开始，各片内 `page_idx` 从 0 开始；两个分片都含 `page_idx=0` 是预期情况。
 
-从仓库根目录执行：
+从包含本技能 `SKILL.md` 的目录执行（合集仓库中为 `skills/wusen-doc2md`）：
 
 ```bash
 python scripts/build_markdown.py --raw examples/book-demo/source/raw \

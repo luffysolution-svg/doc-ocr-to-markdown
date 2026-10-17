@@ -362,7 +362,7 @@ def lookup_crossref(doi: str, title: str, cache_dir: Path) -> tuple[dict, dict]:
         message = json.loads(target.read_text(encoding='utf-8'))
     else:
         request = urllib.request.Request('https://api.crossref.org/works/' + urllib.parse.quote(doi, safe=''),
-                                         headers={'User-Agent': 'doc-ocr-to-markdown/1.0 (metadata lookup)',
+                                         headers={'User-Agent': 'wusen-doc2md/1.0 (metadata lookup)',
                                                   'Accept': 'application/json'})
         with urllib.request.urlopen(request, timeout=15) as response:
             message = json.loads(response.read())['message']

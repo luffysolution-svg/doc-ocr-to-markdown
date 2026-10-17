@@ -1,15 +1,17 @@
 ---
-name: doc-ocr-to-markdown
-description: 将扫描教材、专著图书、理工科课件、顶刊双栏论文、Supporting Information（SI补充材料）和学位论文转化为保留高清图表与LaTeX公式的Markdown知识库。当用户要求把 PDF/PPTX/扫描件转成 Markdown、教材分章节整理、课件转笔记、论文或学位论文入 Obsidian 知识库、导出或同步 Zotero 文献与批注、修复多面板碎图与跨页图表、建立主文与 SI 双链、执行公式全量 KaTeX 校验时使用。支持只读 API + MCP 写入的 Zotero 同步、学术规范命名（第一作者-年份-标题）、元数据 frontmatter、图表 3 倍高清重裁与浏览器沙盒渲染终验。
+name: wusen-doc2md
+description: 将论文、教材、学位论文和课件整理成保留 LaTeX 公式与高清图表的 Markdown 知识库。用于 PDF/PPTX/扫描件转 Markdown、教材分章、论文入 Obsidian、Zotero 文献导出与同步、主文与 SI 双链、OCR 图表修复及公式全量校验。支持现有 OCR 结果的本地装配；需要新识别时使用 MinerU 云端 OCR。
 ---
 
-# 文档转 Markdown 知识库 (doc-ocr-to-markdown)
+# 文档转 Markdown 知识库 (wusen-doc2md)
 
 将整批文档（尤其包含复杂公式、图表、跨页表格的理工科教材、学术论文或扫描课件）整理成干净、自包含、长期可维护的 Markdown 知识库。产出同时面向人类专注阅读与智能体（Agent/RAG）精准检索。
 
 ---
 
 ## 1. 先判断，再动手（Preflight）
+
+首次使用先从本技能目录运行 `python scripts/doctor.py`，确认当前解释器和本地依赖可用。需要云端 OCR 时加 `--require-ocr`；缺少凭证不阻止已满足依赖的本地装配与校验。环境配置见 `README.md`。以下命令中的 `scripts/` 均相对本技能目录，输入与输出路径应使用用户任务的实际路径。
 
 **不要一上来就盲目跑 OCR。** 执行前完成四项预检，可省去大量无效等待与返工：
 
@@ -44,7 +46,7 @@ python scripts/mineru_ocr.py split <源PDF路径> --out-root ./ocr-work --chunk-
 python scripts/mineru_ocr.py submit --out-root ./ocr-work --id-file ./ocr-work/ids.tsv
 ```
 
-- **外文/英文教材**：须显式传入 `--language en`；MinerU 云端 VLM 模型会切换为英文词表与语法对齐，避免模型尝试按中文字符纠偏而产生拼写误伤。
+- **外文/英文教材**：须显式传入 `--language en`；该参数用于声明识别语言；识别效果仍需与原页核对，不能仅凭语言参数保证正确。
 - **坐标系统**：本工具读取的 `content_list.json` 使用 **0–1000 归一化坐标**，裁图时按实际页面宽高换算；`layout.json` 的页面点坐标须先按该页宽高归一化，不能混用或写死整本书尺寸。定位图题时使用 layout 中题注本身的框，不能用所属图块框代替（见 `references/mineru-api.md`）。
 - **网络回退**：若遇 `cdn-mineru.openxlab.org.cn` TLS 握手 EOF，脚本已内置公共 DoH 获取真实 IP 并使用 `curl --resolve` 绕过 fake-IP 劫持（详见 `references/mineru-api.md`）。
 
@@ -72,19 +74,12 @@ OCR 会出现形近字、同音字或英文字母误识（如“轫致辐射”�
 
 ### 步骤 4：科学公式严谨归一化
 
-所有公式转为 Obsidian 兼容的 LaTeX（行内 `$...$`，独立行 `$$...$$`）。核心规则（见 `references/math-normalization.md`）：
-- 中文放进 `\text{}`，化学式放进 `\mathrm{}`；
-- 数学不等号转义：公式中的 `<` 和 `>` 自动转义为 `\lt ` 与 `\gt `，`<<` 和 `>>` 转义为 `\ll ` 与 `\gg `，表格内公式预先实体化转义，杜绝 BeautifulSoup / CommonMark / Obsidian 引擎将其误识别为 HTML 标签而破坏定界符与表格列；
-- 保留文本分组语义；有歧义的嵌套分组和标点回源确认后再修；
-- 修复粘连命令：`\vert` 与变量字母粘连（如 `\vertz` → `\vert z`、`\vertj` → `\vert j`、`\vertHg` → `\vert Hg`），`\cdotkg` → `\cdot kg`；
-- 化学配离子与物态消歧：涉及 `[Fe(CN)6](aq)` 等配合物物态时，正文中统一放入 `$\mathrm{...}$` 环境，避免 CommonMark 将 `[配合物](aq)` 误贪婪匹配为超链接；校验器把 `(aq)` 一类伪链接判为错误而不是豁免，故意报错迫使回源修正，不替用户猜测化学物态；
-- 标题公式保全：标题中的化学分子式与数学符号必须完整保留行内公式语法（如 `$\mathrm{CO}_2$`）；纯文本降级时必须转为 Unicode 下标（如 `CO₂`），严禁保留破坏性的裸下划线伪代码；
-- 解释性方括号排版防劫持：正文中非超链接、非图片、非数字引用编号的解释性方括号，若内部包含公式 `$..$` 或中文说明，一律规范化为中文全角方括号 `［...］`，避免 Obsidian 将其误判为快捷链接导致公式无法渲染且源码着色为蓝；
-- 参考文献原生段落支持：`ref_text` 由解析器原生转换为正文段落，不再依赖外挂的 `set_type: body_text` 修复规则；
-- 孤儿切图安全清理：开启 `--prune-orphans` 可在重新构建后自动核对 `.build-ownership.json`，安全剔除因微调裁框遗留的未引用旧切图；
-- 化学下标处于文本模式时，核对后用数学模式保留其下标，例如 `\text{NH_4Cl}` → `\mathrm{NH_4Cl}`；
-- 多重式号、未知命令、化学结构及跨正文括号须回看原页确认，通过 `--repairs` 显式应用，不自动猜测编号或物理含义；
-- 编译通过只证明语法可接受；二维结构失真时保留原版裁图。
+所有公式使用 Obsidian 兼容的 LaTeX：行内 `$...$`，独立公式使用单独成行的 `$$`。处理公式前读取 `references/math-normalization.md`，其中给出完整规则与前后对照。
+
+- 自动修复只限可确定的语法归一化；式号、未知符号、物理含义和化学结构须回源后通过 `--repairs` 修改。
+- 标题保留完整行内公式；需要纯文本时采用语义等价的 Unicode，不能留下裸下划线。
+- 区分公式、图片 alt 与正文图注，避免方括号、物态和不等号被 Markdown/HTML 误解析。
+- 无法可靠表达的二维化学结构使用高清原图；编译成功仅证明语法通过。
 
 ### 步骤 5：组织正文结构与知识库装配
 
@@ -113,8 +108,8 @@ python scripts/build_research_document.py --pdf <论文PDF> --raw <OCR目录> \
 - **标题与习题精准消歧**：区分名词性小节编号（如 `1. 晶胞概念` 归入 H3）与指令性习题题干（如 `1. 计算这个数`、以 `。？！` 结句或位于习题区者保留为列表/正文），层级结构严谨；拆分章名与传入标题一致时去重；实质脚注和整页图保留，不按 OCR 标签或面积静默丢弃。
 - **干净交付**：默认只生成导航、正文 Markdown 和图片；构建状态位于输出旁的 `.<目录名>.build/`，可用 `--state-dir` 指定外部工作目录。
 - **可选检索**：仅当用户明确要求后续 Agent 检索、RAG 时添加 `--agent-index`，生成 `agent/` 分块与原页映射。
-- **回源修复**：`--repairs repairs.json` 接受 `[{"page":1,"bbox":[100,200,800,300],"field":"text","old":"原识别","new":"核对后的内容","reason":"原页核对依据"}]`；可附 `set_type:"body_text"` 强制正文或 `set_type:"page_footnote"` 保留脚注，`text` 则仍参与标题判定。补原图使用 `action:"add_image"`、裁切 `bbox` 和 `after:{"bbox":[...],"text":"原始锚点"}`。旧值或定位不匹配立即停止，审计留在外部构建状态。
-- **图块修复**：`action:"update_image"` 用原 `page+bbox` 和完整 `old` 图块快照核对后，原子修改 `new_bbox`、`image_caption` / `image_footnote`；`add_image` 也支持题注，配合 `skip` 处理确认后的合图、拆图。新增或改框必须从原 PDF 重裁，修复图块不再自动合并。格式及 chart 字段规则按需读取 `references/mineru-api.md` 的“回源修复图块”。
+- **回源修复**：修改前核对原页，通过 `--repairs repairs.json` 提供页码、坐标、旧值、新值和原因；旧值或定位不匹配时停止。文字、脚注、合图及裁框的格式见 `references/mineru-api.md` 的“回源修复图块”一节。图块新增或改框必须从原 PDF 重裁。
+- **孤儿图片**：仅通用 `build_markdown.py` 支持 `--prune-orphans`，按所有权记录清理未引用的生成资产；科研入口不接受此开关。保留用户文件，不能直接清空目录。
 - **过滤模型泄漏**：自动清除 `The Ground Truth...` 等模型推理遗留文本。
 - **扫描件物理边缘噪声排查与清洗**：扫描教材在章节首尾页、装订中缝或页面边缘常残留物理伪影（如防伪印章、条形码乱码、借书章残印、边缘阴影，例如“用应从请勿填清文件中？”等无意义伪字符）。排查时核验章节起始首三行及页边极值位置，通过 `--repairs` 配置 `{"field":"text","old":"...","new":"","reason":"扫描边缘物理印章/条形码伪影"}` 精准清空剔除，严禁让扫描杂质污染章首标题与正式引言。
 
@@ -142,34 +137,19 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 ```
 - 打开 `http://127.0.0.1:8766/` 验证 `document.documentElement.dataset.ready === "true"` 且 `.math-error` 数量为 0；检查各章实际图片数量与加载状态。加载成功只证明文件可显示，异常图仍须逐幅对照原页确认面板、题注和裁框完整。
 - **客户端真实渲染终验**：**“公式语法编译通过 ≠ 客户端显示正常”**。本地沙箱通过后，最终交付必须在实际宿主客户端（如 Obsidian）中核验阅读与实时预览视图，确保没有被 Markdown 语法劫持的伪链接或裸公式。
+- **宿主不可用时**：交付报告明确写“自动校验通过，真实客户端终验待完成”，列出未核验项；不能宣称已完成客户端验收，也不为此无限等待。
 - **Obsidian 客户端兼容提示**：在瞬间批量写入数百张新插图时，Obsidian 后台文件监视器（File Watcher）可能存在索引延迟，偶见“找不到图片”占位提示。重启 Obsidian 即可触发全库索引扫描并正常渲染。
 
 ### 步骤 8：Zotero 同步（只读 API + MCP 写入）
 
-Zotero 本地 HTTP API 在本技能中**只读**；所有写入经 Zotero 官方 MCP 工具执行，并回读确认：
+仅用户请求 Zotero 导出或同步时读取 `references/zotero-sync.md` 并执行。HTTP API 只读，写入通过宿主提供的 Zotero MCP 工具；无 MCP 写入能力时交付操作计划，明确同步尚未完成。
 
 ```bash
-# 1. 只读对比（默认不写任何文件）
-python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 标题/第一作者 等 - 年份 - 标题.md"
-
-# 2. 首次同步：显式选择以哪一方为准，生成 MCP 操作计划
-python scripts/zotero_sync.py "文献.md" --apply --initial-direction remote \
-    --report zotero-sync-report.json
-
-# 3. 用 MCP 执行 report 中的 operations（update_item / add_note），
-#    再跑同一命令回读；退出码 0 且状态 verified_remote_write 才算完成
-python scripts/zotero_sync.py "文献.md" --apply --initial-direction remote \
-    --report zotero-sync-report.json
-
-# 4. 拉取 PDF 批注（按 annotation key 增量更新受管区域）
-python scripts/zotero_sync.py "文献.md" --apply --pull-annotations \
-    --report zotero-sync-report.json
+# 默认只读对比，不修改文件
+python scripts/zotero_sync.py "文献.md"
 ```
 
-- 退出码：`0` 已一致/回读通过，`1` 冲突或失败，`2` 有待执行的 MCP 操作。
-- 三方基线与 pending 保存在文档旁的 `.文档名.zotero-sync.json`；首次未指定方向会报 `initial_direction_required`。
-- 群组库必须同时匹配 frontmatter URI 与 `--base-url /api/groups/<id>`；个人库与群组库不会互相误路由。
-- 只更新带稳定 `KB-SYNC:` 标识的受管笔记和 `zotero-sync:annotations` 受管区域，用户自建笔记与正文不受影响。字段映射与限制见 `references/zotero-sync.md`。
+首次应用须显式选择同步方向；本地与远端冲突时停止。退出码 `2` 表示仍有待执行操作，执行 MCP 写入后必须重跑并回读核验，只有退出码 `0` 且状态 `verified_remote_write` 才能确认远端写入完成。
 
 ---
 
@@ -212,6 +192,6 @@ python scripts/zotero_sync.py "文献.md" --apply --pull-annotations \
 - `references/research-documents.md` — 学术文献（期刊/学位论文/预印本/独立PDF）标准命名、元数据frontmatter、双栏阅读流与验收规范
 - `references/zotero-sync.md` — Zotero 同步（只读 API、三方基线、MCP 操作计划与回读、批注增量、附件审计）规范
 - `references/book-workflow.md` — 500+ 页学术专著与教材的切片、全局映射与分章节重组指南
-- `references/math-normalization.md` — 14 条科学公式归一化规则与真实例子
+- `references/math-normalization.md` — 16 条科学公式归一化规则与真实例子
 - `references/mineru-api.md` — MinerU 官方契约、数据结构、归一化坐标与 DoH 连接策略
 - `examples/RESULTS.md` — 包含《材料分析测试方法》PPT课件与《物理化学（第六版）下册》556页超长教材全流程实战成果
