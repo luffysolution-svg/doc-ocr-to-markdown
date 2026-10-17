@@ -41,6 +41,14 @@
 <summary><b>4. 双链气泡悬停与折叠抽屉子图精准对照（Sub-figure Crop）</b></summary>
 
 ![Obsidian 图文证据对照与切片子图](docs/images/obsidian_visual_evidence.png)
+
+![Obsidian 折叠图表与 Figure 3 对照](docs/images/obsidian_figure_comparison.png)
+</details>
+
+<details>
+<summary><b>5. 50+ 页 SI 定向探针与催化性能 Benchmark 横向对照</b></summary>
+
+![Obsidian SI 定向探针与 Benchmark 对照](docs/images/obsidian_si_probe.png)
 </details>
 
 ## 安装

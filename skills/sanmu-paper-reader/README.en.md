@@ -41,6 +41,14 @@ Benchmark reading results demonstrated on an *Advanced Materials* (2024, 36, 231
 <summary><b>4. Bidirectional Evidence Hover & Sub-figure Crop Alignment</b></summary>
 
 ![Obsidian Subfigure Alignment](docs/images/obsidian_visual_evidence.png)
+
+![Obsidian Collapsible Figure 3 Comparison](docs/images/obsidian_figure_comparison.png)
+</details>
+
+<details>
+<summary><b>5. 50+ Page SI Fast-Probe & Catalytic Benchmark Comparison</b></summary>
+
+![Obsidian SI Probe and Benchmark](docs/images/obsidian_si_probe.png)
 </details>
 
 ## Installation
