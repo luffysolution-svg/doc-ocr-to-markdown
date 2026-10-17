@@ -17,6 +17,31 @@ Practical workflows, packaged as reusable skills for AI assistants.
 
 ## Quick start
 
+### Ask your AI assistant to install it (recommended)
+
+Copy this prompt into your coding assistant:
+
+```text
+Please install and configure Wusen's wusen-skills collection:
+https://github.com/luffysolution-svg/wusen-skills
+
+1. Check Git and Node.js, then install the collection for the current AI assistant at user scope:
+   npx skills add luffysolution-svg/wusen-skills --skill '*' -g
+   Select the target matching the current assistant and check for local edits before updating an existing installation.
+2. Read each installed skill's README and configure its dependencies.
+3. For wusen-doc2md, enter the skill directory containing SKILL.md, prefer a dedicated Python virtual environment, and run:
+   python -m pip install -r requirements.txt
+   npm --prefix scripts install --ignore-scripts --no-audit --no-fund
+   python scripts/doctor.py
+   python -m unittest discover -s tests -v
+4. Check MINERU_API_TOKEN configuration without displaying its value. If missing, direct me to https://mineru.net and explain how to set it locally.
+5. Report installation paths, validation results, and any remaining configuration steps.
+```
+
+[Full AI installation instructions for wusen-doc2md](skills/wusen-doc2md/README.en.md#option-1-ask-your-ai-assistant-to-install-and-configure-it-recommended)
+
+### Command-line installation
+
 Install the entire collection to your user directory:
 
 ```bash

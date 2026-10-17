@@ -24,7 +24,33 @@
 
 ## 安装与依赖
 
-### 安装技能
+### 方式一：让 AI 助手安装配置（推荐）
+
+将下面的指令复制给 Claude Code、Codex、ZCode、Cursor 等 AI 编码助手，让它完成技能安装、依赖配置和环境校验：
+
+```text
+请帮我安装并配置 wusen-doc2md 技能，仓库地址：
+https://github.com/luffysolution-svg/wusen-skills
+
+1. 检查 Git、Node.js 和 Python 环境，通过下面的命令将技能安装到当前 AI 助手的用户级技能目录：
+   npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
+   根据当前助手选择对应安装目标；已有安装时先检查本地修改，避免覆盖。
+2. 找到安装器输出的 wusen-doc2md 目录，确认其中有 SKILL.md、requirements.txt 和 scripts/。
+   后续命令均从该技能目录执行；不要把合集仓库根目录当作技能目录。
+3. 优先使用独立 Python 虚拟环境，安装 Python 依赖：
+   python -m pip install -r requirements.txt
+4. 安装公式校验所需的 Node.js 依赖：
+   npm --prefix scripts install --ignore-scripts --no-audit --no-fund
+5. 使用配置好的 Python 运行环境检查和测试：
+   python scripts/doctor.py
+   python -m unittest discover -s tests -v
+6. 检查 MINERU_API_TOKEN 是否配置；不要显示凭证值。
+   如未配置，提示我从 https://mineru.net 获取并在本地设置。
+   已配置时运行 python scripts/doctor.py --require-ocr，检查配置状态。
+7. 告诉我技能安装位置、验证结果和仍需配置的项目。
+```
+
+### 方式二：命令行安装
 
 ```bash
 # 安装单个技能（全局）

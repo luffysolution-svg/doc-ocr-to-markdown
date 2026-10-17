@@ -22,7 +22,33 @@ The workflow covers full KaTeX compilation, source-based figure recovery, multi-
 
 ## Installation and dependencies
 
-### Install the skill
+### Option 1: Ask your AI assistant to install and configure it (recommended)
+
+Copy this prompt into Claude Code, Codex, ZCode, Cursor, or another coding assistant to install the skill, configure dependencies, and validate the environment:
+
+```text
+Please install and configure the wusen-doc2md skill from:
+https://github.com/luffysolution-svg/wusen-skills
+
+1. Check Git, Node.js, and Python, then install the skill for the current AI assistant at user scope:
+   npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
+   Select the target matching the current assistant. If already installed, check for local edits before updating.
+2. Locate the installed wusen-doc2md directory reported by the installer and confirm that it contains SKILL.md, requirements.txt, and scripts/.
+   Run the following commands from that skill directory, not the collection repository root.
+3. Prefer a dedicated Python virtual environment and install the Python dependencies:
+   python -m pip install -r requirements.txt
+4. Install the Node.js dependencies for formula validation:
+   npm --prefix scripts install --ignore-scripts --no-audit --no-fund
+5. Use the configured Python environment to run checks and tests:
+   python scripts/doctor.py
+   python -m unittest discover -s tests -v
+6. Check whether MINERU_API_TOKEN is configured without displaying its value.
+   If missing, direct me to https://mineru.net and explain how to set it locally.
+   If configured, run python scripts/doctor.py --require-ocr to check configuration status.
+7. Report the installation path, validation results, and any remaining configuration steps.
+```
+
+### Option 2: Install from the command line
 
 ```bash
 # Install this skill globally

@@ -17,6 +17,31 @@
 
 ## 快速安装
 
+### 让 AI 助手安装（推荐）
+
+复制下面的指令，发给你正在使用的 AI 编码助手：
+
+```text
+请帮我安装并配置吴森的 wusen-skills 技能合集：
+https://github.com/luffysolution-svg/wusen-skills
+
+1. 检查 Git 和 Node.js，通过以下命令安装合集到当前 AI 助手的用户级技能目录：
+   npx skills add luffysolution-svg/wusen-skills --skill '*' -g
+   选择当前助手对应的安装目标；已有安装时先检查本地修改。
+2. 阅读已安装技能的 README，按各自要求配置依赖。
+3. 对 wusen-doc2md，进入包含 SKILL.md 的技能目录，优先使用独立 Python 虚拟环境，再执行：
+   python -m pip install -r requirements.txt
+   npm --prefix scripts install --ignore-scripts --no-audit --no-fund
+   python scripts/doctor.py
+   python -m unittest discover -s tests -v
+4. 检查 MINERU_API_TOKEN 配置状态，不显示凭证值；未配置时指导我从 https://mineru.net 获取并在本地设置。
+5. 汇报安装位置、验证结果和仍需配置的项目。
+```
+
+[wusen-doc2md 的完整 AI 安装指令](skills/wusen-doc2md/README.md#方式一让-ai-助手安装配置推荐)
+
+### 命令行安装
+
 安装整个合集到用户目录：
 
 ```bash
