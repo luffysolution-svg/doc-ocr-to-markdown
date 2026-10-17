@@ -240,7 +240,7 @@ def parse_resources(text: str) -> list[Resource]:
     return resources
 
 
-def resolve_resource(resource: Resource, source: Path, root: Path) -> Path | None:
+def resolve_resource(resource: Resource, source: Path, root: Path, *, resource_root: Path | None = None) -> Path | None:
     """Resolve local targets; wiki basenames may uniquely match sibling SI notes."""
     destination = html.unescape(resource.destination)
     parts = urlsplit(destination)
@@ -255,9 +255,9 @@ def resolve_resource(resource: Resource, source: Path, root: Path) -> Path | Non
     if not decoded:
         return source.resolve()
     target = (source.parent / decoded).resolve()
+    scope = (resource_root or root).resolve()
     if resource.syntax == 'wiki':
-        boundary = root.resolve().parent
-        if not target.is_relative_to(boundary):
+        if not target.is_relative_to(scope):
             raise ValueError(f'Wikilink escapes resource boundary: {destination}')
     if safe_path(target).is_file():
         return target
@@ -266,11 +266,10 @@ def resolve_resource(resource: Resource, source: Path, root: Path) -> Path | Non
             candidate = Path(str(target) + '.md')
             if safe_path(candidate).is_file():
                 return candidate
-        # Limit cross-document lookup to the output root and its immediate
-        # parent (the established main/SI sibling-document arrangement).
+        # Limit cross-document lookup to the output root and its designated resource scope.
         names = {decoded, decoded + '.md'} if not Path(decoded).suffix else {decoded}
-        matches = [p.resolve() for p in walk_files(root.parent)
-                   if p.name in names and (p.is_relative_to(root) or p.parent.parent == root.parent)]
+        matches = [p.resolve() for p in walk_files(scope)
+                   if p.name in names and p.is_relative_to(scope)]
         matches = sorted(set(matches))
         if len(matches) == 1:
             return matches[0]

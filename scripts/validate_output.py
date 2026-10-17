@@ -141,7 +141,7 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter, *, ro
                 errors.append(f'{name}: 化学物态疑似被解析为链接 {resource.destination}；请将配位方括号转义或放入公式')
                 continue
             try:
-                target = resolve_resource(resource, path, resource_root or root)
+                target = resolve_resource(resource, path, root, resource_root=resource_root)
                 if target is None:
                     if is_image:
                         errors.append(f'{name}: 图片使用绝对/远程地址 {resource.destination}')

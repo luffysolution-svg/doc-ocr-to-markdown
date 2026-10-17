@@ -163,6 +163,27 @@ class OutputTests(unittest.TestCase):
         (other / 'supplement.md').write_text('# Other\n', encoding='utf-8')
         self.assertTrue(any('Ambiguous' in e for e in validate(self.root, None, resource_root=self.root.parent)['errors']))
 
+    def test_resource_lookup_never_scans_parent_of_resource_root(self):
+        from unittest.mock import patch
+        import os
+        from portable_paths import logical_path
+        sibling = self.root.parent / 'SI'
+        sibling.mkdir()
+        (sibling / 'supplement.md').write_text('# SI\n\n## Figure S1\n', encoding='utf-8')
+        self.note('# Note\n\n[[supplement#Figure S1]]\n')
+        real_scandir = os.scandir
+
+        def guarded_scandir(path):
+            resolved = logical_path(path).resolve()
+            if not resolved.is_relative_to(self.root.parent.resolve()):
+                raise PermissionError(f'Access denied to unboundary path: {path}')
+            return real_scandir(path)
+
+        with patch('portable_paths.os.scandir', side_effect=guarded_scandir):
+            report = validate(self.root, None, resource_root=self.root.parent)
+            self.assertEqual(report['status'], 'pass', report)
+            self.assertEqual(report['errors'], [])
+
     def test_navigation_gate_is_explicit_for_library_callers(self):
         self.note('# Note\n')
         self.assertEqual(self.report()['status'], 'pass')
