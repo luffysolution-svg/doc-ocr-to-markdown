@@ -1,0 +1,96 @@
+<div align="center">
+
+# wusen-paper-reader
+
+**读懂论文、对齐证据，把材料与化学文献积累成可复用的研究知识。**
+
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**简体中文** · [English](README.en.md)
+
+[安装](#安装) · [使用场景](#使用场景) · [学科检查](#材料与化学的五类检查) · [验证范围](#验证与限制)
+
+</div>
+
+面向已有论文、SI、Zotero附件与解析后的Markdown，支持单篇精读、跨文献对比、跨学科迁移、跨主题综合和知识库问答。核心是把论断链接到已读的证据，并保留条件、局限和研究疑问。
+
+## 安装
+
+### 让AI助手安装（推荐）
+
+复制以下指令：
+
+```text
+请帮我安装并配置 wusen-paper-reader 文献解读技能：
+https://github.com/luffysolution-svg/wusen-skills
+
+1. 检查 Git、Node.js，通过下面的命令安装到当前助手的用户级技能目录：
+   npx skills add luffysolution-svg/wusen-skills --skill wusen-paper-reader -g
+   选择当前助手的安装目标；已有安装先检查本地修改。
+2. 阅读安装目录里的 SKILL.md 和 README.md。
+3. 核心解读由当前助手完成，不需要单独模型API或deep-research；离线证据工具需要Python 3.10+，没有第三方依赖。
+4. 从包含SKILL.md的技能目录运行：
+   python -m unittest discover -s tests -v
+   python scripts/evidence_tools.py --help
+5. 我提供Markdown时直接阅读；提供PDF时检查当前宿主的PDF读取能力；提供Zotero条目时检查Zotero连接。需要扫描件解析时再配置可用OCR工具。
+6. 不显示凭证值。告诉我技能位置、测试结果，以及哪些可选读取能力可用。
+```
+
+### 命令行安装
+
+```bash
+npx skills add luffysolution-svg/wusen-skills --skill wusen-paper-reader -g
+```
+
+核心Skill无Python包依赖；附带脚本使用Python 3.10+标准库。PDF读取、OCR、Zotero由宿主或可选工具提供，均不强制绑定某个平台。若从本地未发布源码安装，把完整的 `skills/wusen-paper-reader` 目录复制或链接到助手的技能目录；远程命令只能安装已经发布到仓库的版本。
+
+## 使用场景
+
+| 场景 | 示例请求 | 主要产物 |
+| --- | --- | --- |
+| 单篇 | 精读这篇光催化论文，解释Fig.4和Fig.5，区分实验观察与机理推断。 | 核心论断、证据、方法缺口与研究启发 |
+| 跨文献 | 比较MatterGen和GNoME，重点看稳定性定义、参照凸包与实验验证口径。 | 带条件的比较表、一致与分歧 |
+| 跨学科 | 将材料生成模型的方法迁移到催化剂设计，指出概念对应和验证缺口。 | 适用条件映射、失配风险和验证方案 |
+| 跨主题 | 把晶体生成、缺陷调控和光热催化组织成一个研究问题，区分文献依据与新假设。 | 主题联系、证据缺口和阅读路径 |
+| 知识库问答 | 我现有文献中，哪些支持“缺陷一定提高产氢”？找反例和条件限制。 | 有出处的回答与检索范围 |
+
+不会因为问一个具体问题就生成一组长文档。完整精读默认生成独立阅读笔记；跨文献和长期积累可附证据表，来源文本与用户原有见解分开保存。
+
+## 材料与化学的五类检查
+
+- **合成与表征**：原料、组成、物相、热处理、样品身份及结构证据，避免把间接表征写成唯一机理。
+- **催化与电化学**：光源、波长、反应介质、温度、负载量、参比电极、归一化与空白对照；光催化与电催化按实际研究分别检查。
+- **DFT与计算**：泛函、U/自旋、k点、收敛、表面/缺陷、能量参照、自由能修正；计算稳定不等同动力学可行或可合成。
+- **光谱与机理**：峰归属、拟合、对照、时间尺度、原位状态与替代解释；PL强度和寿命需联系具体过程判断。
+- **性能比较**：指标定义、单位、条件、样本和不确定度；材料ML额外区分训练/测试、数据泄漏、预测/DFT/实验验证与统计分母。
+
+参考文件按场景与学科两层组织，主文件只加载当前任务需要的部分。跨学科与跨主题有独立方法，不用单篇总结模板拼接。
+
+## 离线证据工具
+
+从技能目录运行：
+
+```bash
+python scripts/evidence_tools.py inventory ./sources --out ./work/sources.json
+python scripts/evidence_tools.py check ./work/evidence.json --root ./sources --out ./work/check.json
+python -m unittest discover -s tests -v
+```
+
+`inventory` 发现Markdown并记录相对路径、哈希、标题与章节。阅读后按 [证据契约](references/evidence-contract.md) 填写 `evidence.json`。`check` 检查字段、路径边界、哈希与正文引文；不联网，也不自动生成科学结论。输出文件内容不同时拒绝覆盖，修订时使用新文件名。
+
+## 与解析工具衔接
+
+可直接读取 [wusen-doc2md](https://github.com/luffysolution-svg/wusen-skills/tree/main/skills/wusen-doc2md) 产物，但不依赖该技能。已有可靠解析结果优先复用；原生文字导出只作为阅读文本，复杂公式、图表及双栏顺序需要回到PDF核对。未获取SI时明确标注，不猜测其中的实验或计算参数。
+
+Zotero只作为可选来源，不直接操作数据库，不遍历存储目录。读取与本地实测不修改文献库；写笔记或批注依用户授权执行并回读。
+
+## 验证与限制
+
+测试题、判据和实际覆盖见 [evals](evals/README.md)。当前以材料与化学为主要迭代领域，不声称已覆盖所有子方向。
+
+机械检查通过只表示文件与引文结构可核对，不证明页码、图号、语义支持或科学结论正确。解读需要区分作者报告、助手解释和待验证假设。个人文献库问答不等同完整系统综述。
+
+## 许可证
+
+[MIT](LICENSE)。文献PDF、用户文库与私人批注不随技能分发。

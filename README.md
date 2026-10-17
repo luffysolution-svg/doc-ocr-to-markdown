@@ -35,10 +35,11 @@ https://github.com/luffysolution-svg/wusen-skills
    python scripts/doctor.py
    python -m unittest discover -s tests -v
 4. 检查 MINERU_API_TOKEN 配置状态，不显示凭证值；未配置时指导我从 https://mineru.net 获取并在本地设置。
-5. 汇报安装位置、验证结果和仍需配置的项目。
+5. 对 wusen-paper-reader，使用 Python 3.10+ 从技能目录执行 python -m unittest discover -s tests -v；附带证据工具无第三方依赖，PDF/OCR/Zotero按实际输入检查可用性。
+6. 汇报安装位置、验证结果和仍需配置的项目。
 ```
 
-[wusen-doc2md 的完整 AI 安装指令](skills/wusen-doc2md/README.md#方式一让-ai-助手安装配置推荐)
+完整 AI 安装指令：[文档解析](skills/wusen-doc2md/README.md#方式一让-ai-助手安装配置推荐) · [文献解读](skills/wusen-paper-reader/README.md#让ai助手安装推荐)
 
 ### 命令行安装
 
@@ -61,6 +62,7 @@ npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
 | 技能 | 用途 | 文档 |
 | --- | --- | --- |
 | **wusen-doc2md** | 将论文、教材和课件整理成保留 LaTeX 公式、高清图表与 Zotero 元数据的 Markdown 知识库。 | [使用指南](skills/wusen-doc2md/README.md) |
+| **wusen-paper-reader** | 单篇精读、跨文献对比、跨学科与跨主题解读及知识库问答，优先材料与化学，保留可追溯证据。 | [使用指南](skills/wusen-paper-reader/README.md) |
 
 ### wusen-doc2md
 
@@ -112,6 +114,12 @@ python -m pip install -r skills/wusen-doc2md/requirements.txt
 npm --prefix skills/wusen-doc2md/scripts install --ignore-scripts --no-audit --no-fund
 python -m unittest discover -s skills/wusen-doc2md/tests -v
 python skills/wusen-doc2md/scripts/doctor.py
+```
+
+验证 `wusen-paper-reader`（Python 3.10+，无第三方依赖）：
+
+```bash
+python -m unittest discover -s skills/wusen-paper-reader/tests -v
 ```
 
 ## 许可证

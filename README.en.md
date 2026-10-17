@@ -35,10 +35,11 @@ https://github.com/luffysolution-svg/wusen-skills
    python scripts/doctor.py
    python -m unittest discover -s tests -v
 4. Check MINERU_API_TOKEN configuration without displaying its value. If missing, direct me to https://mineru.net and explain how to set it locally.
-5. Report installation paths, validation results, and any remaining configuration steps.
+5. For wusen-paper-reader, use Python 3.10+ to run python -m unittest discover -s tests -v from its skill directory. Its evidence tools have no third-party dependencies; check PDF/OCR/Zotero integrations only as needed.
+6. Report installation paths, validation results, and any remaining configuration steps.
 ```
 
-[Full AI installation instructions for wusen-doc2md](skills/wusen-doc2md/README.en.md#option-1-ask-your-ai-assistant-to-install-and-configure-it-recommended)
+Full AI installation instructions: [Document conversion](skills/wusen-doc2md/README.en.md#option-1-ask-your-ai-assistant-to-install-and-configure-it-recommended) · [Paper reading](skills/wusen-paper-reader/README.en.md#ask-your-ai-assistant-to-install-it-recommended)
 
 ### Command-line installation
 
@@ -61,6 +62,7 @@ npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
 | Skill | Purpose | Documentation |
 | --- | --- | --- |
 | **wusen-doc2md** | Turn papers, textbooks, and slides into a Markdown knowledge base with LaTeX formulas, high-resolution figures, and Zotero metadata. | [Usage guide](skills/wusen-doc2md/README.en.md) |
+| **wusen-paper-reader** | Evidence-grounded paper reading, cross-paper comparison, interdisciplinary transfer, cross-topic synthesis, and library questions, with materials and chemistry checks. | [Usage guide](skills/wusen-paper-reader/README.en.md) |
 
 ### wusen-doc2md
 
@@ -112,6 +114,12 @@ python -m pip install -r skills/wusen-doc2md/requirements.txt
 npm --prefix skills/wusen-doc2md/scripts install --ignore-scripts --no-audit --no-fund
 python -m unittest discover -s skills/wusen-doc2md/tests -v
 python skills/wusen-doc2md/scripts/doctor.py
+```
+
+Validate `wusen-paper-reader` (Python 3.10+, no third-party dependencies):
+
+```bash
+python -m unittest discover -s skills/wusen-paper-reader/tests -v
 ```
 
 ## License
