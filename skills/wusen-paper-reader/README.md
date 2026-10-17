@@ -13,7 +13,7 @@
 
 </div>
 
-面向已有论文、SI、Zotero附件与解析后的Markdown，支持单篇精读、跨文献对比、跨学科迁移、跨主题综合和知识库问答。核心是把论断链接到已读的证据，并保留条件、局限和研究疑问。
+面向已有论文、SI、Zotero附件与解析后的Markdown，支持单篇精读、跨文献对比、跨学科迁移、跨主题综合和知识库问答。核心是把论断链接到已读的证据，并保留条件、局限和研究疑问。内置图文对照证据链预览（折叠 Callout 与双链悬停）、实验复现 SOP 配方卡导出、Mermaid 机理流程图、50+ 页 SI 轻量定向探针穿透、催化性能 Benchmark 横向入库及 Zotero 学术标签增强。
 
 ## 安装
 
@@ -67,17 +67,26 @@ npx skills add luffysolution-svg/wusen-skills --skill wusen-paper-reader -g
 
 参考文件按场景与学科两层组织，主文件只加载当前任务需要的部分。跨学科与跨主题有独立方法，不用单篇总结模板拼接。
 
-## 离线证据工具
+## 离线证据与科研辅助工具
 
 从技能目录运行：
 
 ```bash
+# 1. 证据核验与清单生成
 python scripts/evidence_tools.py inventory ./sources --out ./work/sources.json
 python scripts/evidence_tools.py check ./work/evidence.json --root ./sources --out ./work/check.json
+
+# 2. 50+ 页 SI 轻量定向探针（毫秒级提取合成、催化、DFT 参数与图表）
+python scripts/si_probe.py ./sources/paper-SI.pdf --search "TEOA,xenon,Hubbard"
+
+# 3. 性能 Benchmark 结构化横向入库
+python scripts/benchmark_collector.py add ./benchmarks.csv --json-entry '{"doi":"10.1002/adma.202313513","activity_rate":"10.71"}'
+
+# 4. 全套离线自动化测试
 python -m unittest discover -s tests -v
 ```
 
-`inventory` 发现Markdown并记录相对路径、哈希、标题与章节。阅读后按 [证据契约](references/evidence-contract.md) 填写 `evidence.json`。`check` 检查字段、路径边界、哈希与正文引文；不联网，也不自动生成科学结论。输出文件内容不同时拒绝覆盖，修订时使用新文件名。
+`inventory` 发现Markdown并记录相对路径、哈希、标题与章节。阅读后按 [证据契约](references/evidence-contract.md) 填写 `evidence.json`。`check` 检查字段、路径边界、哈希与正文引文；不联网，也不自动生成科学结论。输出文件内容不同时拒绝覆盖，修订时使用新文件名。`si_probe.py` 利用轻量本地解析快速透视几十页的复杂补充材料，无需重量级云端 OCR。`benchmark_collector.py` 实现多文献催化数据的标准化去重录入与 Markdown 汇总导出。
 
 ## 与解析工具衔接
 

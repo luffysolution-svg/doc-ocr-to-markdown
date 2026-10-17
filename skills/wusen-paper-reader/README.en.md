@@ -13,7 +13,7 @@
 
 </div>
 
-Interpret papers, supporting information, Zotero attachments, and existing Markdown through single-paper reading, cross-paper comparison, interdisciplinary transfer, cross-topic synthesis, and evidence-grounded library questions. Preserve experimental conditions, uncertainties, and the distinction between reported findings and new hypotheses.
+Interpret papers, supporting information, Zotero attachments, and existing Markdown through single-paper reading, cross-paper comparison, interdisciplinary transfer, cross-topic synthesis, and evidence-grounded library questions. Features visual evidence preview (collapsible Callouts & hover previews), experimental replication protocols (SOPs), native Mermaid mechanism flowcharts, rapid SI fast-probe parameter penetration, cross-literature benchmark logging, and Zotero academic tagging. Preserve experimental conditions, uncertainties, and the distinction between reported findings and new hypotheses.
 
 ## Installation
 
@@ -69,17 +69,26 @@ Five domain references are loaded only when relevant:
 
 Instructions and references are currently written in Chinese; the assistant can apply them in the requested output language. Scenarios and domain checks are separate layers rather than one fixed summary template.
 
-## Offline evidence tools
+## Offline Evidence & Research Tools
 
 From the skill directory:
 
 ```bash
+# 1. Evidence ledger inventory & checks
 python scripts/evidence_tools.py inventory ./sources --out ./work/sources.json
 python scripts/evidence_tools.py check ./work/evidence.json --root ./sources --out ./work/check.json
+
+# 2. 50+ page SI Fast-Probe (instant parameter penetration)
+python scripts/si_probe.py ./sources/paper-SI.pdf --search "TEOA,xenon,Hubbard"
+
+# 3. Cross-literature catalytic benchmark logging
+python scripts/benchmark_collector.py add ./benchmarks.csv --json-entry '{"doi":"10.1002/adma.202313513","activity_rate":"10.71"}'
+
+# 4. Offline test suite
 python -m unittest discover -s tests -v
 ```
 
-`inventory` records Markdown paths, hashes, titles, and headings. After reading, populate the evidence ledger using the [evidence contract](references/evidence-contract.md). `check` validates structure, path boundaries, source hashes, and quoted text. It makes no network or model calls. Conflicting existing outputs are rejected; use new filenames for revisions.
+`inventory` records Markdown paths, hashes, titles, and headings. After reading, populate the evidence ledger using the [evidence contract](references/evidence-contract.md). `check` validates structure, path boundaries, source hashes, and quoted text. It makes no network or model calls. Conflicting existing outputs are rejected; use new filenames for revisions. `si_probe.py` penetrates multi-page Supporting Information documents without heavy cloud OCR pipelines. `benchmark_collector.py` deduplicates and records catalytic performance data across papers.
 
 ## Document and library integration
 
