@@ -168,6 +168,38 @@ class MathTests(unittest.TestCase):
             self.assertEqual([r['line'] for r in records[:2]], [3, 4])
             self.assertEqual(records[2]['kind'], 'parse-error')
 
+    def test_commonmark_continuations_list_footnotes_and_nested_fences(self):
+        text = ('Prose\n    continuation $a$\n\n- list\n\n    continuation $b$\n\n'
+                '[^n]: footnote $c$\n\n    continuation $d$\n\n'
+                '> ~~~tex\n> $code$\n> ~~~\n\n    $indented-code$\n')
+        spans, issues = scan_math(text)
+        self.assertEqual([s.body for s in spans], ['a', 'b', 'c', 'd'])
+        self.assertEqual(issues, [])
+        from preview_server import render_markdown
+        self.assertEqual(render_markdown(text).count('data-display='), 4)
+
+    def test_prose_rewrite_preserves_all_existing_link_and_code_syntax(self):
+        text = ('[[中文#标题|显示]] ![[图片.png|中文]] [中文][ref] [ref][] [ref]\n\n'
+                '[ref]: target.md "title"\n\n`[中文 $x$]`\n\n'
+                '> ~~~md\n> [中文 $x$]\n> ~~~\n\n    [中文 $x$]\n')
+        self.assertEqual(normalize_prose_brackets(text), text)
+        from markdown_resources import rewrite_unprotected
+        rewritten = rewrite_unprotected(text + '\nFigure S1\n', lambda s: s.replace('Figure S1', 'CHANGED'))
+        self.assertEqual(rewritten, text + '\nCHANGED\n')
+
+    def test_python_and_node_structural_diagnostics_match(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('node unavailable')
+        bodies = [r'(x', r'[x]', r'\text{literal (}', r'[\text{Au(NO}_{3})_{3}]',
+                  r'\left. x\right)', r'\tag{1}+x\tag{2}', r'\tag{13.}',
+                  r'\text{\tag{1}}+x', r'x}', r'\{x\}', r'\\\tag{1}+x\tag{2}']
+        script = 'const s=require(process.argv[1]);let x="";process.stdin.on("data",d=>x+=d);process.stdin.on("end",()=>console.log(JSON.stringify(JSON.parse(x).map(s.structuralIssues))));'
+        run = subprocess.run([node, '-e', script, str(SCRIPTS / 'validate_math.cjs')],
+                             input=json.dumps(bodies), capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), [math_issues(b) for b in bodies])
+
 
 class KatexTests(unittest.TestCase):
     @classmethod

@@ -11,24 +11,20 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from console_output import safe_print as print
 
 from normalize_math import scan_math, math_issues
 
 
-def _safe_path(p: Path) -> Path:
-    s = os.path.abspath(str(p))
-    if os.name == 'nt' and not s.startswith('\\\\?\\'):
-        return Path('\\\\?\\' + s)
-    return p
+from portable_paths import safe_path as _safe_path, walk_files, read_text, write_text
 
 
 def extract(root: Path) -> list[dict]:
     records = []
-    for path in sorted(root.rglob('*.md')):
-        text = _safe_path(path).read_text(encoding='utf-8')
+    root = root.absolute()
+    for path in walk_files(root, '*.md'):
+        text = read_text(path)
         spans, issues = scan_math(text)
         filename = path.relative_to(root).as_posix()
         for span in spans:
@@ -53,7 +49,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    if not root.is_dir():
+    if not _safe_path(root).is_dir():
         raise SystemExit(f'目录不存在：{root}')
 
     records = extract(root)

@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from portable_paths import safe_path, logical_path, walk_files, read_text
 
 from build_support import Publisher, contained, relative_name, read_items
 from research_metadata import (collect_metadata, export_identity, inspect_pdf,
@@ -26,25 +27,25 @@ SCRIPTS = Path(__file__).resolve().parent
 def write_json(path: Path, data) -> None:
     """Atomic state update; unchanged input records keep their timestamps."""
     encoded = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
-    if path.is_file() and path.read_bytes() == encoded:
+    if safe_path(path).is_file() and safe_path(path).read_bytes() == encoded:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
+    safe_path(path.parent).mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + '.tmp')
-    temporary.write_bytes(encoded)
-    os.replace(temporary, path)
+    safe_path(temporary).write_bytes(encoded)
+    os.replace(safe_path(temporary), safe_path(path))
 
 
 def resolve_raw(raw: Path, identity: str | None) -> tuple[Path, str, Path]:
-    if not raw.is_dir():
+    if not safe_path(raw).is_dir():
         raise ValueError(f'OCR directory does not exist: {raw}')
-    raw = raw.resolve()
-    if (raw / 'raw').is_dir():
+    raw = logical_path(safe_path(raw).resolve())
+    if safe_path(raw / 'raw').is_dir():
         raw = raw / 'raw'
     # Exact item selection takes precedence when the root also has other items.
-    if identity and (raw / identity).is_dir():
+    if identity and safe_path(raw / identity).is_dir():
         folder = contained(raw, identity)
     else:
-        lists = [p for p in raw.rglob('*content_list.json') if not p.name.endswith('_v2.json')]
+        lists = [p for p in walk_files(raw, '*content_list.json') if not p.name.endswith('_v2.json')]
         if len(lists) == 1:
             # Standard item dirs may have one nested extraction folder.
             first = lists[0].relative_to(raw).parts[0]
@@ -71,7 +72,7 @@ def run_command(command: list[str], *, timeout: int = 600) -> dict:
 
 def _hash_tree(root: Path) -> dict:
     return {p.relative_to(root).as_posix(): sha256_file(p)
-            for p in sorted(root.rglob('*')) if p.is_file()}
+            for p in walk_files(root)}
 
 
 def _outputs_unchanged(publisher: Publisher) -> bool:
@@ -85,8 +86,8 @@ def _outputs_unchanged(publisher: Publisher) -> bool:
 
 
 def build(args: argparse.Namespace) -> tuple[int, dict]:
-    pdf = Path(args.pdf).resolve()
-    if not pdf.is_file():
+    pdf = logical_path(safe_path(args.pdf).resolve())
+    if not safe_path(pdf).is_file():
         raise ValueError(f'PDF does not exist: {pdf}')
     out = Path(args.out).absolute()
     state = Path(args.state_dir).absolute() if args.state_dir else out.parent / f'.{out.name}.build'
@@ -96,7 +97,7 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
         if parent.is_symlink() or (hasattr(parent, 'is_junction') and parent.is_junction()):
             raise ValueError(f'State path contains a link: {parent}')
     preflight = inspect_pdf(pdf)
-    payload = load_export(Path(args.metadata).resolve() if args.metadata else None,
+    payload = load_export(logical_path(safe_path(args.metadata).resolve()) if args.metadata else None,
                           args.id, preflight['sha256'])
     identity = args.id or (export_identity(payload) if payload else None)
     if identity:
@@ -113,11 +114,13 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
     si_doc = getattr(args, 'si_doc', None)
     supplement_to = getattr(args, 'supplement_to', None)
     if si_doc:
-        si_clean = re.sub(r'^(?:\[\[)?(.*?)(?:\]\])?$', r'\1', si_doc.strip())
+        from research_metadata import clean_document_link
+        si_clean = clean_document_link(si_doc)
         fields['has_supplement'] = f'[[{si_clean}]]'
         provenance['field_sources']['has_supplement'] = 'caller_supplied_supplemental_link'
     if supplement_to:
-        main_clean = re.sub(r'^(?:\[\[)?(.*?)(?:\]\])?$', r'\1', supplement_to.strip())
+        from research_metadata import clean_document_link
+        main_clean = clean_document_link(supplement_to)
         fields['supplement_to'] = f'[[{main_clean}]]'
         provenance['field_sources']['supplement_to'] = 'caller_supplied_main_paper_link'
     title = fields.get('title') or pdf.stem
@@ -127,11 +130,14 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
         target_file = args.file if args.file.endswith('.md') else f'{args.file}.md'
     else:
         from research_metadata import format_zotero_basename
-        extra_cand = preflight.get('pdf_properties') if isinstance(preflight.get('pdf_properties'), dict) else {}
-        target_file = f'{format_zotero_basename(fields, pdf.stem, extra_candidates=extra_cand)}.md'
+        if getattr(args, 'naming', 'zotero') == 'classic':
+            from research_metadata import sanitize_filename_title
+            target_file = sanitize_filename_title(title) + '.md'
+        else:
+            target_file = f'{format_zotero_basename(fields, pdf.stem)}.md'
     manifest = {'source': str(pdf), 'pages': preflight['page_count'], 'parts': [
         {'id': part_id, 'start_page': 1, 'end_page': preflight['page_count']}]}
-    chapters = [{'id': identity, 'title': title, 'file': target_file,
+    chapters = [{'id': identity, 'title': title, 'file': target_file, 'naming': getattr(args, 'naming', 'zotero'),
                  'start': 1, 'end': preflight['page_count']}]
     research = contained(state, 'research')
     manifest_path = contained(research, 'manifest.json')
@@ -142,14 +148,14 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
     # ownership checks because a prior run happened to report success.
     fingerprint = {'pdf': preflight['sha256'], 'raw_path': str(item_dir), 'raw': _hash_tree(item_dir),
                    'metadata': fields, 'identity': identity, 'reading_order': args.reading_order,
-                   'file': target_file,
+                   'file': target_file, 'naming': getattr(args, 'naming', 'zotero'),
                    'repairs': sha256_file(Path(args.repairs)) if args.repairs else None,
                    'auto_repairs': bool(getattr(args, 'auto_repairs', True)),
                    'code': {p.name: sha256_file(p) for p in sorted(SCRIPTS.glob('*.py'))},
                    'math_validator': sha256_file(SCRIPTS / 'validate_math.cjs'),
                    'keep_table_images': True}
     cache_key = hashlib.sha256(json.dumps(fingerprint, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    previous = json.loads(report_path.read_text(encoding='utf-8')) if report_path.is_file() else {}
+    previous = json.loads(read_text(report_path)) if safe_path(report_path).is_file() else {}
     cache_hit = previous.get('cache_key') == cache_key and previous.get('automatic_checks') == 'pass' and _outputs_unchanged(publisher)
     write_json(contained(research, 'preflight.json'), preflight)
     write_json(contained(research, 'provenance.json'), provenance)
@@ -178,24 +184,6 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
             report['automatic_checks'] = 'build_failed'
             write_json(report_path, report)
             return 1, report
-        target_md_path = contained(out, target_file)
-        if target_md_path.is_file():
-            md_text = target_md_path.read_text(encoding='utf-8')
-            modified = False
-            if si_doc:
-                from research_metadata import link_supplemental_references
-                si_clean = re.sub(r'^(?:\[\[)?(.*?)(?:\]\])?$', r'\1', si_doc.strip())
-                md_text = link_supplemental_references(md_text, si_clean)
-                if '## 补充材料' not in md_text and '## Supporting Information' not in md_text:
-                    md_text = md_text.rstrip() + f'\n\n## 补充材料 (Supporting Information)\n- 详见本文补充材料与附图：[[{si_clean}]]\n'
-                modified = True
-            if supplement_to:
-                from research_metadata import inject_supplement_banner
-                main_clean = re.sub(r'^(?:\[\[)?(.*?)(?:\]\])?$', r'\1', supplement_to.strip())
-                md_text = inject_supplement_banner(md_text, main_clean)
-                modified = True
-            if modified:
-                target_md_path.write_text(md_text, encoding='utf-8', newline='\n')
     else:
         report['build'] = 'reused_unmodified_owned_output'
     # Run validators even on cache hit, capturing every exit code and output.
@@ -205,6 +193,8 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
         [sys.executable, str(SCRIPTS / 'validate_output.py'), str(out), '--images-dir', 'images', '--json'],
         [sys.executable, str(SCRIPTS / 'extract_formulas.py'), str(out), '--out', str(formulas_path)],
     ]
+    if si_doc or supplement_to:
+        commands[0].extend(['--resource-root', str(out.parent)])
     for command in commands:
         report['commands'].append(run_command(command))
     extraction = report['commands'][-1]
@@ -229,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--out', required=True, help='Delivery directory for ONE PDF; contains academic Markdown document')
     parser.add_argument('--file', help='Explicit Markdown filename inside --out (default: academic {{firstCreator}} - {{year}} - {{title}}.md)')
     parser.add_argument('--naming', choices=['zotero', 'classic'], default='zotero',
-                        help='Naming style (default: zotero pattern; standard academic naming)')
+                        help='zotero: evidenced author/year/title; classic: title only; --file overrides both')
     parser.add_argument('--state-dir', help='External state directory (default sibling .<out-name>.build)')
     parser.add_argument('--repairs', help='Source-verified repairs forwarded unchanged to core')
     parser.add_argument('--auto-repairs', action=argparse.BooleanOptionalAction, default=True,

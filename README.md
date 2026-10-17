@@ -2,13 +2,13 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![KaTeX 100%](https://img.shields.io/badge/KaTeX-100%25%20Strict-brightgreen.svg)](https://katex.org/)
-[![Tests](https://img.shields.io/badge/tests-216%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-307%20passed-success.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Agent Skill](https://img.shields.io/badge/Agent%20Skill-Claude%20%7C%20ZCode%20%7C%20Codex-orange.svg)](https://docs.anthropic.com/en/docs/claude-code/skills)
 
-把扫描教材、PDF图书、理工科课件、中英文学术论文、硕博学位论文等文档整理成带高清图片、表格和可渲染 LaTeX 公式的 Markdown 知识库 —— 专为 AI 编码助手打造的工业级 [Agent Skill](https://docs.anthropic.com/en/docs/claude-code/skills)。
+把扫描教材、PDF 图书、理工科课件、中英文学术论文、硕博学位论文等文档整理成带高清图片、表格和可渲染 LaTeX 公式的 Markdown 知识库 —— 专为 AI 编码助手打造的工业级 [Agent Skill](https://docs.anthropic.com/en/docs/claude-code/skills)。
 
-不仅是简单的文本提取，它专注解决高难度理工科学术文档的真正痛点：**公式全量 KaTeX 编译、图表回源保真、多面板错切修复、表格内二维码保留、OCR 错字校对、超长学位论文/教材分片组装、孤儿切图安全清理，以及期刊 PDF / Zotero 元数据 frontmatter**。编译通过不等于内容完整，图表和科学符号仍须逐项核对原文并经 Obsidian 客户端真实渲染终验。
+不只是文本提取。它专注解决理工科学术文档的真正痛点：**公式全量 KaTeX 编译、图表回源保真、多面板错切修复、表格内二维码保留、OCR 错字校对、超长学位论文与教材分片组装、孤儿切图安全清理，以及期刊 PDF 与 Zotero 元数据 frontmatter**。编译通过不等于内容完整，图表与科学符号仍须逐项核对原文，并经真实客户端渲染终验。
 
 ---
 
@@ -25,7 +25,7 @@
 - **同音字/形近字错漏**："轫致辐射"→"韧致辐射"、"ν"→"v"、"N₀"→"No"；
 - **模型推理泄漏**：多模态 OCR 模型的 "The Ground Truth image displays..." 等提示词进入正文。
 
-本 Skill 提供标准工业流水线与严格质量门禁（KaTeX 全量 100% 编译通过 + Obsidian 真实渲染终验），每条规则均来自 1,800+ 页真实经典教材与学术文献的实战踩坑。
+本 Skill 提供标准流水线与严格质量门禁（KaTeX 全量编译通过 + 真实客户端渲染终验），规则来自真实教材与学术文献的实战踩坑。
 
 ---
 
@@ -38,7 +38,7 @@
 | **组织架构** | 多章节分流（`01-第一章.md`、`00-目录.md`） | 按讲次/课时组织 | 单篇独立文献一体化（主笔记 + `00-目录.md`） |
 | **排版流向** | **几何自然流**混排（$\Delta y = 25$），严禁插图置顶 | **视觉置顶**排版（图置顶，承接文字与要点） | 默认保留经核对的物理 OCR 双栏阅读流 |
 | **标题与习题** | 严格章节判定，精准区分小节标题与习题题干 | 保持幻灯片页面核心主题 | 统一学术标准命名 `{{firstCreator}} - {{year}} - {{title}}.md` |
-| **图表处理** | 原 PDF 至少 3× 高清重裁，多面板 union 合并 | 优先提取 PPTX 内嵌原图，清洗图内小标签 | 缝合 XRD/TEM/XPS 等多面板碎块，支持 SI 补充材料 |
+| **图表处理** | 原 PDF 至少 3× 高清重裁，多面板 union 合并 | 优先提取 PPTX 内嵌原图，清洗图内小标签 | 高置信度多面板缝合，支持 SI 补充材料 |
 | **元数据** | 保留实质性学术脚注，清洗运行页眉页脚 | 对齐原生文本层，按相似度校正错字 | 提取完整 YAML frontmatter（DOI、作者、摘要、Zotero URI） |
 
 ---
@@ -98,7 +98,7 @@ examples/
 | **案例二：物理化学（第六版）下册** | 556 页全扫描经典高校教材 | **7,523 个** | 332 张 | **KaTeX 7,523/7,523 全部通过（0 失败）**，提取 28 个拓展二维码 |
 | **案例三：中文科研文献与硕博学位论文全集** | 5 篇共 611 页（含 240 页博士论文） | **5,797 个** | 398 张 | 解决 Obsidian 方括号链接劫持、保全标题化学式、**安全清理 89 个历史旧图** |
 | **案例四：英文前沿期刊文献集** | 7 篇共 87 页顶级英文期刊 (Nature/Matter 等) | 876 个 | 114 张 | 双栏阅读流还原，突破 Windows 路径长度瓶颈，YAML frontmatter 全量注入 |
-| **总计** | **近 2,000 页真实学术文档** | **16,314 个** | **1,043 张** | **全量编译通过率 100%，工业级零损坏交付** |
+| **总计** | **近 2,000 页真实学术文档** | **16,314 个** | **1,043 张** | **全量编译通过率 100%，结构化零损坏交付** |
 
 *详见 [examples/RESULTS.md](examples/RESULTS.md) 与 [examples/RESEARCH-VALIDATION.md](examples/RESEARCH-VALIDATION.md)。*
 

@@ -1,73 +1,53 @@
-# Zotero 双向同步规范与操作指南 (Zotero Bidirectional Sync)
+# Zotero 同步规范与操作指南
 
-本文档定义知识库（Obsidian / Markdown）与本地 Zotero 客户端之间的双向全量同步契约，涵盖元数据（Metadata）、阅读笔记（Notes）、PDF 批注高亮（Annotations）以及附件（Attachments）的协同机制。
+本技能把 Zotero 当作**本地只读数据源**，写入只通过 Zotero 官方 MCP 工具执行，并回读确认。
 
----
+## 1. 安全模型
 
-## 1. 核心原则与安全门禁
+1. **HTTP 只读**：`zotero_sync.py` 只调用 `127.0.0.1:23119` 的 GET 接口，不发送 PATCH/POST；`--apply` 表示"允许修改本地 Markdown 与生成操作计划"，不是"允许 HTTP 写库"。
+2. **写入经 MCP**：元数据、笔记由 `update_item` / `add_note` 执行；批注由 `save_highlights` 等工具执行。计划中每条操作都有库身份、版本、前置值和依赖关系；前置条件不匹配就停止。
+3. **回读才算完成**：CLI 退出码 2 表示有待执行的 MCP 操作；执行后重跑同一命令，退出码 0 且字段状态为 `verified_remote_write` 才算同步完成。
+4. **三方基线**：每个文档旁保存 `.文档名.zotero-sync.json`，记录 base、pending 与文档哈希。首次同步必须显式传 `--initial-direction local|remote`；此后本地与远端各自修改同一字段会进入 `conflict`，不会静默覆盖。空值不会清空远端字段。
+5. **Windows 换行**：受管区域按规范化换行后的内容哈希比较，CRLF/LF 变化不会被误判为人工改区域。
 
-1. **安全第一，默认只读（Dry-Run）**：
-   - 任何涉及 Zotero 数据库（`zotero.sqlite`）或本地 API 的写操作，**默认均为 `--dry-run` 预览对比模式**；
-   - 仅当显式传入 `--apply` 时，才执行真正的写入，杜绝任何自动化静默覆写破坏用户个人核心文献资产。
-2. **单一数据真实源（Single Source of Truth）对齐**：
-   - **元数据**：以 PDF 首页印刷信息、出版商官方 DOI 及 Crossref 经核对后的字段为准，校正 Zotero 中因抓取不全导致的乱码或截断；
-   - **阅读笔记**：以本地 Markdown 中用户与 Agent 沉淀的深度笔记（`## 阅读笔记`）为准，增量推送至 Zotero 形成关联子笔记（Child Note）；
-   - **批注高亮**：以 Zotero 原生 PDF Reader 中的用户划线与批注为准，增量拉取至 Markdown 知识库中生成引用卡片。
+## 2. 字段映射
 
----
-
-## 2. 字段映射表 (Metadata Field Mapping)
-
-| Markdown Frontmatter (YAML) | Zotero Item Field (API / Data) | 说明 |
+| Markdown frontmatter | Zotero | 状态 |
 | :--- | :--- | :--- |
-| `title` | `title` | 论文完整标题（校正去除多余换行与首尾空白） |
-| `authors` (`list[str]`) | `creators` (`list[dict]`) | 完整作者列表（不截断、保留通讯作者与组织作者） |
-| `date` | `date` | 出版日期（保留真实精度，如 `2026-04`） |
-| `publication_title` | `publicationTitle` | 期刊名称 / 会议论文集名 |
-| `volume` | `volume` | 卷号 |
-| `issue` | `issue` | 期号 |
-| `pages` | `pages` | 起止页码（如 `100-115`） |
-| `doi` | `DOI` | 规范化 DOI（去除 `https://doi.org/` 前缀） |
-| `abstract` | `abstractNote` | 原文完整摘要（纯文本段落） |
-| `url` | `url` | 官方在线出版物网址 |
-| `language` | `language` | 语种（如 `zh-CN`, `en`） |
-| `keywords` (`list[str]`) | `tags` (`list[dict]`) | 关键词列表 |
-| `zotero_item_uri` | `links.self` / `key` | 唯一的 Zotero 条目跳转与定位锚点 |
-| `has_supplement` | `relations` / Frontmatter | 关联的补充材料（SI）Obsidian 双链 |
-| `supplement_to` | `relations` / Frontmatter | 关联的主文（Main Paper）Obsidian 双链 |
+| `title` | `title` | 双向 |
+| `publication_title` | `publicationTitle` | 双向 |
+| `volume` / `issue` / `pages` / `date` / `doi` / `url` / `language` | 同名字段 | 双向 |
+| `abstract` | `abstractNote` | 双向 |
+| `keywords` | `tags` | 双向；保留 Zotero 自动标签，拒绝删除自动标签 |
+| `authors` | `creators` | 只比较、不回写（显示名无法无损还原 creator 结构） |
+| `has_supplement` / `supplement_to` | — | 仅 Obsidian frontmatter 关系，不写 Zotero `relations` |
 
----
+## 3. CLI
 
-## 3. CLI 命令行使用方式 (`scripts/zotero_sync.py`)
-
-### 3.1 比较元数据差异（只读审查）
 ```bash
-python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 2026 - 论文标题/第一作者 等 - 2026 - 论文标题.md"
+# 只读审查（不写任何文件）
+python scripts/zotero_sync.py "文献.md"
+
+# 首次：指定以本地或远端为准，生成 MCP 操作计划
+python scripts/zotero_sync.py "文献.md" --apply --initial-direction remote --report sync-report.json
+
+# 执行 report 中 operations 的 MCP 工具后，再跑一次回读确认
+python scripts/zotero_sync.py "文献.md" --apply --initial-direction remote --report sync-report.json
+
+# 拉取附件 PDF 中的批注与高亮（按 annotation key 增量更新受管区域）
+python scripts/zotero_sync.py "文献.md" --apply --pull-annotations --report sync-report.json
 ```
-- 输出本地 frontmatter 与 Zotero 对应条目的差异字段、附件总数及笔记状态；不修改任何文件。
 
-### 3.2 确认回写元数据与推送阅读笔记
-```bash
-python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 2026 - 论文标题/第一作者 等 - 2026 - 论文标题.md" \
-    --apply --report sync-report.json
-```
-- 将校正后的元数据通过本地 API 回写至 Zotero 条目；
-- 将正文中 `## 阅读笔记` 段落自动转换为富文本 HTML 并作为 child note 写入 Zotero（若已存在则去重，不重复新增）。
+- `--report` 与输入、状态文件必须分离；已有非本工具生成的文件不会被覆盖。
+- 群组库必须在 frontmatter URI 中写 `zotero://select/groups/<id>/items/<KEY>`，并用 `--base-url .../api/groups/<id>`；个人库与群组库互斥校验。
+- 退出码：`0` 已一致或已完成回读，`1` 失败/冲突，`2` 有待执行的 MCP 操作。
 
-### 3.3 双向拉取 Zotero PDF 批注至 Markdown
-```bash
-python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 2026 - 论文标题/第一作者 等 - 2026 - 论文标题.md" \
-    --pull-annotations --apply
-```
-- 扫描对应 PDF 附件下所有划线高亮与用户评论，在 Markdown 正文末尾生成 `## Zotero 批注与高亮` 引用卡片（含对应页码）。
+## 4. 阅读笔记
 
----
+- 只同步 `## 阅读笔记` / `## Notes` 等标题下的正文；已存在的受管笔记通过稳定 `KB-SYNC:` 标识与 note key 更新，不重复新建。
+- 用户自己创建的 Zotero 笔记不会被识别为受管笔记，也不会被覆盖。
+- 受管批注区（`<!-- zotero-sync:annotations:begin -->`）与阅读笔记分离；批注增删改只更新该区域。
 
-## 4. Agent 交互式执行模式（Zotero MCP 工具联动）
+## 5. 附件审计
 
-在支持 Zotero 官方插件的交互会话中，Agent 可按需组合调用内置 MCP 工具执行细粒度同步：
-
-1. **元数据更新**：调用 `mcp__plugin_zotero_zotero__update_item`，传入 `key` 与待更新的 `fields`；
-2. **笔记挂载**：调用 `mcp__plugin_zotero_zotero__add_note`，传入 `parentKey` 与 Markdown 内容；
-3. **补充附件关联**：调用 `mcp__plugin_zotero_zotero__attach_pdf`，将知识库生成的 SI PDF 或重组高清版 PDF 挂载至对应条目；
-4. **批注同步**：调用 `mcp__plugin_zotero_zotero__save_highlights` 或 `search_annotations` 检索并保存会话内的高亮批注。
+报告中的附件条目检查：是否存在、是否 PDF、能否通过本地 API 读取、SHA-256、字节数、Zotero linkMode，以及是否疑似补充材料。审计只读，不改附件。

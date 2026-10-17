@@ -36,6 +36,8 @@ import tempfile
 from collections import Counter, defaultdict
 from contextlib import ExitStack
 from urllib.parse import quote
+from figure_identifiers import caption_keys, caption_identifier
+from portable_paths import safe_path, logical_path, walk_files, read_text
 
 from build_support import Publisher, asset_path, contained, load_book, read_items, relative_name, RESERVED, OWNERSHIP, digest
 from difflib import SequenceMatcher
@@ -112,25 +114,35 @@ def load_source(path: Path) -> list[dict]:
     """读 PPTX：每页返回原生文本框和图片（含二进制）。"""
     if Presentation is None:
         raise RuntimeError('需要 python-pptx：pip install python-pptx')
-    prs = Presentation(path)
+    prs = Presentation(safe_path(path))
     sw, sh = prs.slide_width, prs.slide_height
     pages = []
     for slide in list(prs.slides):
-        texts, pictures = [], []
+        texts, pictures, unsafe = [], [], []
         for shape in slide.shapes:
             box = (shape.left / sw, shape.top / sh,
                    (shape.left + shape.width) / sw, (shape.top + shape.height) / sh)
             if shape.shape_type == MSO_SHAPE_TYPE.PICTURE and shape.width >= sw * 0.035 and shape.height >= sh * 0.025:
-                blob = shape.image.blob
-                pictures.append({'box': box, 'ext': shape.image.ext, 'blob': blob})
+                transformed = (bool(shape.rotation) or any(abs(getattr(shape, key, 0)) > 1e-8
+                               for key in ('crop_left', 'crop_top', 'crop_right', 'crop_bottom'))
+                               or any(getattr(shape._element.spPr.xfrm, key, False) for key in ('flipH', 'flipV')))
+                if transformed:
+                    unsafe.append(box)
+                else:
+                    pictures.append({'box': box, 'ext': shape.image.ext, 'blob': shape.image.blob})
+            elif shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                unsafe.append(box)
             elif shape.has_text_frame and shape.text.strip():
+                unsafe.append(box)
                 lines = [re.sub(r'[ \t]+', ' ', x).strip()
                          for x in shape.text_frame.text.split('\n')]
                 text = flatten_paragraphs([x for x in lines if x])
                 if not text or text in SKIP_TEXT:
                     continue
                 texts.append({'box': box, 'text': text, 'key': nkey(text)})
-        pages.append({'texts': texts, 'pictures': pictures})
+            else:
+                unsafe.append(box)
+        pages.append({'texts': texts, 'pictures': pictures, 'unsafe_pictures': unsafe})
     return pages
 
 
@@ -156,10 +168,10 @@ def best_picture_match(box, pictures: list[dict], used: set):
     for index, pic in enumerate(pictures):
         if index in used:
             continue
-        score = max(overlap(box, pic['box']), overlap(pic['box'], box))
+        score = min(overlap(box, pic['box']), overlap(pic['box'], box))
         if best is None or score > best[0]:
             best = (score, index, pic)
-    if best and best[0] >= 0.35:
+    if best and best[0] >= 0.98:
         return best
     return None
 
@@ -191,6 +203,37 @@ class FigureStore:
         if not target.exists():
             target.write_bytes(blob)
         return name
+
+    def native_pdf_image(self, page, box):
+        """Extract only an exact, untransformed standalone image region.
+
+        Any vector, text, second image, clipping ambiguity, mask or rotated image
+        falls back to a rendered crop, which preserves the page composition.
+        """
+        try:
+            import fitz
+            region = fitz.Rect(box[0] * page.rect.width, box[1] * page.rect.height,
+                               box[2] * page.rect.width, box[3] * page.rect.height)
+            infos = [info for info in page.get_image_info(xrefs=True)
+                     if fitz.Rect(info['bbox']).intersects(region)]
+            if len(infos) != 1 or not infos[0].get('xref'):
+                return None
+            info = infos[0]
+            if any(abs(a - b) > .5 for a, b in zip(info['bbox'], region)):
+                return None
+            a, b, c, d, _, _ = info['transform']
+            if a <= 0 or d <= 0 or abs(b) > 1e-6 or abs(c) > 1e-6:
+                return None
+            marks = [(kind, bbox) for kind, bbox in page.get_bboxlog()
+                     if fitz.Rect(bbox).intersects(region)]
+            if len(marks) != 1 or marks[0][0] != 'fill-image':
+                return None
+            image = page.parent.extract_image(info['xref'])
+            if not image or image.get('smask') or image.get('colorspace') not in (1, 3):
+                return None
+            return image['image'], image['ext']
+        except Exception:
+            return None
 
     def crop(self, pdf_page, box: tuple, scale: int = 1920) -> bytes | None:
         """裁图失败交还调用方，由其尝试原 OCR 图。"""
@@ -314,15 +357,13 @@ def full_page_scan(item: dict) -> bool:
 
 
 def figure_numbers(items: list[dict]) -> set[str]:
-    """Only explicit caption prefixes identify a figure for merge conflicts."""
-    numbers = set()
-    for caption in captions_of(items):
-        match = re.match(r'^\s*(?:(Extended\s+Data)\s+)?(?:图\s*|(?:Figure|Fig\.?)\s*)(\d+(?:\s*[-－–—.]\s*\d+)*)',
-                         normalize('NFKC', caption), re.I)
-        if match:
-            number = re.sub(r'\s+', '', match[2]).translate(str.maketrans('－–—', '---'))
-            numbers.add(('extended:' if match[1] else '') + number)
-    return numbers
+    """Caption identity uses the same namespace and kind grammar as auditing."""
+    captions = []
+    for item in items:
+        for field in ('image_caption', 'chart_caption', 'table_caption'):
+            value = item.get(field) or []
+            captions.extend([value] if isinstance(value, str) else value)
+    return set(caption_keys(captions))
 
 
 def image_groups(items: list[dict]) -> dict[int, list[dict]]:
@@ -510,7 +551,7 @@ def build_chapter(items: list[dict], source_pages: list[dict] | None, pdf_path: 
         pdf = None
         if pdf_path:
             import fitz
-            pdf = resources.enter_context(fitz.open(pdf_path))
+            pdf = resources.enter_context(fitz.open(safe_path(pdf_path)))
             if page_offset < 0 or any(pi + page_offset >= len(pdf) for pi in by_page):
                 raise ValueError('OCR 页码超出原 PDF 范围')
         if page_count is not None:
@@ -532,8 +573,22 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
     have_section = False
     previous_level = 1
     code_blocks = set()
+    figure_headings = set()
     all_items = [item for pi in sorted(by_page) for item in (_sort_page_items(by_page[pi]) if mode == 'book' and reading_order == 'geometry' else by_page[pi])]
     title_parts = {id(all_items[i]) for i in chapter_title_parts(all_items, title)} if mode == 'book' else set()
+    table_ranges = defaultdict(list)
+    for table in all_items:
+        if table.get('type') == 'table':
+            page = table.get('_page', table.get('page_idx', 0) + page_offset + 1)
+            caps = table.get('table_caption') or []
+            caps = [caps] if isinstance(caps, str) else caps
+            for key in caption_keys(caps):
+                table_ranges[key].append(page)
+    for key, pages in table_ranges.items():
+        if len(set(pages)) > 1:
+            review.append({'kind': 'continued_table_preserved', 'identifier': key,
+                           'pages': sorted(set(pages)), 'page_range': [min(pages), max(pages)],
+                           'reason': 'Repeated table identity across pages; no verified cell/schema merge evidence'})
     marginal_counts = Counter(nkey(item.get('text', '')) for item in all_items
                               if item.get('type') in ('header', 'footer'))
     for pi in sorted(by_page):
@@ -593,10 +648,20 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                                       for member in group)
                 if recrop_required and pdf is None:
                     raise ValueError(f'修复图片必须从原 PDF 重裁: page={actual_pi + 1}')
-                match = best_picture_match(box, source['pictures'], set()) if source and not recrop_required else None
+                unsafe_native = source and any(max(overlap(box, region), overlap(region, box)) > 0
+                                               for region in source.get('unsafe_pictures', []))
+                if source and sum(max(overlap(box, picture['box']), overlap(picture['box'], box)) > 0
+                                  for picture in source['pictures']) > 1:
+                    unsafe_native = True
+                match = best_picture_match(box, source['pictures'], set()) if source and not recrop_required and not unsafe_native else None
                 if match and overlap(box, match[2]['box']) >= 0.9:
                     names.append(store.store(match[2]['blob'], match[2]['ext']))
                     stats['native_figures'] += 1
+                if not names and pdf is not None and not recrop_required:
+                    native = store.native_pdf_image(pdf[actual_pi], box)
+                    if native:
+                        names.append(store.store(*native))
+                        stats['native_pdf_figures'] += 1
                 if not names and pdf is not None:
                     blob = store.crop(pdf[actual_pi], box)
                     if blob:
@@ -604,6 +669,8 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                         stats['cropped_figures'] += 1
                 if recrop_required and not names:
                     raise ValueError(f'修复图片 PDF 重裁失败: page={actual_pi + 1}')
+                if not names and unsafe_native:
+                    raise ValueError(f'PPTX transformed/composed region requires a successful PDF crop: page={actual_pi + 1}')
                 if not names:
                     # A failed union crop falls back to every fragment, preserving data.
                     for member in group:
@@ -623,6 +690,10 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                 for name in names:
                     target_container.append(f'![{alt}](images/{image_dir.name}/{name})')
                 for cap in caps:
+                    identifier = caption_identifier(cap)
+                    if identifier and identifier.namespace == 'supplemental' and identifier.heading not in figure_headings:
+                        target_container.append('## ' + identifier.heading)
+                        figure_headings.add(identifier.heading)
                     target_container.append(inline_math(cap))
                 stats['figures'] += 1
                 continue
@@ -737,6 +808,10 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
             # ---- 表格 ----
             if kind == 'table':
                 for cap in captions_of([item]):
+                    identifier = caption_identifier(cap)
+                    if identifier and identifier.namespace == 'supplemental' and identifier.heading not in figure_headings:
+                        emit.append('## ' + identifier.heading)
+                        figure_headings.add(identifier.heading)
                     emit.append(inline_math(cap))
                 md = table_markdown(item.get('table_body', ''), store=store, ocr_dir=item_ocr_dir,
                                     image_dir_name=image_dir.name)
@@ -831,10 +906,10 @@ def main() -> None:
         parser.error('--clean 已禁用：不会清理任何目录')
     if bool(args.manifest) != bool(args.chapters):
         parser.error('--manifest 与 --chapters 必须一起提供')
-    raw_root = Path(args.raw).resolve()
+    raw_root = logical_path(safe_path(args.raw).resolve())
     # Preserve the supplied final component so Publisher can reject output symlinks.
     out_root = Path(args.out).absolute()
-    if not raw_root.is_dir():
+    if not safe_path(raw_root).is_dir():
         parser.error(f'OCR 目录不存在: {raw_root}')
     if out_root.resolve().is_relative_to(raw_root) or raw_root.is_relative_to(out_root.resolve()):
         parser.error('输入和输出目录不得相互包含')
@@ -849,7 +924,7 @@ def main() -> None:
         parser.error('--only 至少需要一个 id')
     sources = {}
     if args.source_dir:
-        for path in sorted(Path(args.source_dir).glob(args.source_glob)):
+        for path in sorted((p for p in walk_files(Path(args.source_dir), args.source_glob) if p.parent == Path(args.source_dir).absolute())):
             stem = re.sub(r'^\d+[\s\-_]*', '', path.stem).strip()
             sources[path.stem] = path
             sources[stem] = path
@@ -857,8 +932,8 @@ def main() -> None:
     mode = 'book' if args.manifest else args.mode
     if args.manifest:
         manifest_path = Path(args.manifest).resolve()
-        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-        sections = json.loads(Path(args.chapters).read_text(encoding='utf-8'))
+        manifest = json.loads(read_text(manifest_path))
+        sections = json.loads(read_text(Path(args.chapters)))
         pdf_path = Path(args.pdf).resolve() if args.pdf else None
         if pdf_path is None and manifest.get('source'):
             source = Path(manifest['source'])
@@ -868,7 +943,7 @@ def main() -> None:
         if args.repairs:
             from book_features import apply_repairs
             blocks, repairs_applied = apply_repairs(
-                blocks, json.loads(Path(args.repairs).read_text(encoding='utf-8')), pdf_path)
+                blocks, json.loads(read_text(Path(args.repairs))), pdf_path)
         elif args.auto_repairs and pdf_path is not None:
             from audit_figures import generate_confident_repairs_for_blocks
             from book_features import apply_repairs
@@ -891,8 +966,8 @@ def main() -> None:
         if args.repairs:
             parser.error('--repairs 需要 --manifest 与 --chapters，以确定全书页码')
         repairs_applied = []
-        titles = json.loads(Path(args.titles).read_text(encoding='utf-8')) if args.titles else {}
-        folders = sorted(d for d in raw_root.iterdir() if d.is_dir())
+        titles = json.loads(read_text(Path(args.titles))) if args.titles else {}
+        folders = sorted(d for d in safe_path(raw_root).iterdir() if d.is_dir())
         identities = {d.name for d in folders}
         if only and not only <= identities:
             raise ValueError(f'--only 未知目录: {sorted(only - identities)}')
@@ -908,7 +983,7 @@ def main() -> None:
             source_path = match_source(folder.name, sources, ordinal) if sources else None
             pdf_path = Path(args.pdf).resolve() if args.pdf else None
             if pdf_path is None and args.pdf_dir:
-                candidates = sorted(Path(args.pdf_dir).glob('*.pdf'))
+                candidates = sorted(walk_files(Path(args.pdf_dir), '*.pdf'))
                 pdf_path = next((p for p in candidates if
                                  (source_path and p.stem == source_path.stem) or folder.name in p.stem), None)
                 if pdf_path is None:
@@ -923,7 +998,7 @@ def main() -> None:
         raise ValueError('没有找到可装配的 OCR 结果')
     if previous.get('chapters') and previous.get('mode') != mode:
         raise ValueError('已有输出模式不同，请使用新输出目录')
-    metadata = json.loads(Path(args.metadata_json).read_text(encoding='utf-8')) if args.metadata_json else {}
+    metadata = json.loads(read_text(Path(args.metadata_json))) if args.metadata_json else {}
     if not isinstance(metadata, dict) or any(not isinstance(value, dict) for value in metadata.values()):
         raise ValueError('metadata-json 必须是章节 id 到元数据对象的映射')
     if metadata.keys() - identities:
@@ -951,7 +1026,18 @@ def main() -> None:
                 keep_table_images=args.keep_table_images, page_map=page_map,
                 page_count=job['page_count'], reading_order=args.reading_order)
             if job['id'] in metadata:
-                from research_metadata import render_frontmatter
+                from research_metadata import render_frontmatter, prepare_research_markdown
+                original_lines = len(text.splitlines())
+                text = prepare_research_markdown(text, metadata[job['id']])
+                banner_lines = 3 if metadata[job['id']].get('supplement_to') else 0
+                for mapping in page_map:
+                    for key in ('start_line', 'end_line'):
+                        if mapping.get(key) is not None:
+                            mapping[key] += banner_lines
+                if page_map and metadata[job['id']].get('has_supplement'):
+                    last = next((entry for entry in reversed(page_map) if entry.get('end_line') is not None), None)
+                    if last:
+                        last['end_line'] += len(text.splitlines()) - original_lines - banner_lines
                 header = render_frontmatter(metadata[job['id']])
                 text = header + text
                 for mapping in page_map:
@@ -1026,19 +1112,26 @@ def _prune_orphan_images(out_root: Path, state_root: Path) -> int:
     except Exception:
         return 0
 
+    from markdown_resources import parse_resources, resolve_resource
     referenced = set()
-    for md_file in out_root.rglob('*.md'):
-        if not md_file.is_file():
-            continue
-        try:
-            content = md_file.read_text(encoding='utf-8')
-            for match in re.findall(r'!\[.*?\]\(([^)]+)\)', content):
-                target = match.split('?')[0].strip()
-                resolved = (md_file.parent / target).resolve()
-                if resolved.is_relative_to(out_root.resolve()):
-                    referenced.add(resolved.relative_to(out_root.resolve()).as_posix())
-        except Exception:
-            continue
+    try:
+        for md_file in walk_files(out_root, '*.md'):
+            content = read_text(md_file)
+            resources = parse_resources(content)
+            # Unresolved reference syntax is plain text to CommonMark. Keep all
+            # assets if image-like markup could not be accounted for by parsing.
+            if len(re.findall(r'!\[|<img', content, re.I)) > sum(r.kind == 'image' for r in resources):
+                return 0
+            for resource in resources:
+                # Links also preserve assets: a user can link an image without
+                # embedding it. An unresolved reference makes pruning unsafe.
+                resolved = resolve_resource(resource, md_file, out_root)
+                if resolved is not None:
+                    resolved = resolved.resolve()
+                    if resolved.is_relative_to(out_root.resolve()):
+                        referenced.add(resolved.relative_to(out_root.resolve()).as_posix())
+    except (OSError, ValueError, TypeError, KeyError):
+        return 0
 
     pruned = 0
     updated_owned = dict(owned)

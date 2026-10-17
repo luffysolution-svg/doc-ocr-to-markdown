@@ -49,12 +49,13 @@ def validate_base_url(value: str) -> str:
         if not address.is_loopback or '%' in (host or ''):
             raise ExportError('API URL must use a loopback IP')
     port = parsed.port  # Also validates the port before any I/O.
-    if parsed.path.rstrip('/') not in ('', '/api/users/0'):
-        raise ExportError('API URL path must be /api/users/0 or the server root')
+    api_path = parsed.path.rstrip('/') or '/api/users/0'
+    if not re.fullmatch(r'/api/(?:users|groups)/\d+', api_path):
+        raise ExportError('API URL path must identify /api/users/ID or /api/groups/ID')
     authority = f'[{host}]' if ':' in host else host
     if port is not None:
         authority += f':{port}'
-    return f'{parsed.scheme}://{authority}/api/users/0'
+    return f'{parsed.scheme}://{authority}{api_path}'
 
 
 def valid_key(value: str) -> str:
@@ -76,6 +77,8 @@ class LocalAPI:
         self.opener = build_opener(ProxyHandler({}), _NoRedirect())
 
     def get(self, endpoint, params=None):
+        if not re.fullmatch(r'/items(?:/top|/[A-Z0-9]{8}(?:/children|/file)?)?', endpoint):
+            raise ExportError('Invalid local API endpoint')
         url = self.base_url + endpoint
         if params:
             url += '?' + urlencode(params)
@@ -88,19 +91,36 @@ class LocalAPI:
             exc.close()
             raise ExportError(f'Local API returned HTTP {exc.code} for {endpoint}') from None
 
-    def items(self, endpoint):
+    def items(self, endpoint, params=None):
         """Offset pagination never follows API-provided external next links."""
-        start, limit = 0, 100
+        start, limit, seen = 0, 100, set()
+        snapshot = None
         while True:
-            with self.get(endpoint, {'start': start, 'limit': limit}) as response:
+            with self.get(endpoint, {**(params or {}), 'start': start, 'limit': limit}) as response:
                 batch = json.load(response)
                 total = response.headers.get('Total-Results')
+                current = (response.headers.get('Last-Modified-Version'), total)
+                if snapshot is None:
+                    snapshot = current
+                elif snapshot != current:
+                    raise ExportError('API changed during pagination; retry a complete snapshot')
             if not isinstance(batch, list):
                 raise ExportError('Expected an API item list')
-            yield from batch
+            for item in batch:
+                data = _data(item)
+                key = valid_key(item.get('key') or data.get('key'))
+                if key in seen:
+                    raise ExportError('Repeated item in pagination; refusing incomplete snapshot')
+                seen.add(key)
+                yield item
             start += len(batch)
-            if not batch or (start >= int(total) if total is not None else len(batch) < limit):
+            if not batch:
+                if total is not None and start < int(total):
+                    raise ExportError('Truncated API pagination')
                 break
+            if total is not None and start >= int(total):
+                break
+            # Without Total-Results continue until empty, even for capped pages.
 
     def pdf(self, attachment_key):
         with self.get(f'/items/{valid_key(attachment_key)}/file') as response:
@@ -168,13 +188,101 @@ def _atomic_write(path: Path, raw: bytes):
             name.unlink(missing_ok=True)
 
 
+def sha256(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def read_owned(path: Path, owner: str):
+    if not path.exists():
+        return None
+    _check_destination(path, path.read_bytes())
+    obj = json.loads(path.read_text(encoding='utf-8'))
+    if (obj.get('owner') != owner or obj.get('sha256') != sha256(
+            json.dumps(obj.get('payload'), ensure_ascii=False, sort_keys=True).encode())):
+        raise ExportError(f'Unowned or manually edited state/report: {path}')
+    return obj['payload']
+
+
+def replace_checked(path: Path, raw: bytes, expected: bytes | None):
+    """Atomic publication with a cooperative lock and a last ownership check."""
+    if expected is None:
+        _atomic_write(path, raw)
+        return
+    _check_destination(path, expected)
+    if raw == expected:
+        return
+    name = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.zotero-', delete=False) as handle:
+            name = Path(handle.name)
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if not path.exists() or path.read_bytes() != expected:
+            raise ExportError(f'Concurrent file modification: {path}')
+        _check_destination(path, expected)
+        os.replace(name, path)
+    finally:
+        if name:
+            name.unlink(missing_ok=True)
+
+
+def write_owned(path: Path, payload, owner: str):
+    previous = path.read_bytes() if path.exists() else None
+    read_owned(path, owner)
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    raw = (json.dumps({'owner': owner, 'sha256': sha256(canonical), 'payload': payload},
+                      ensure_ascii=False, indent=2) + '\n').encode()
+    replace_checked(path, raw, previous)
+
+
+class FileLock:
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        _check_destination(self.path, b'')
+        try:
+            self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            raise ExportError(f'Another operation owns lock: {self.path}') from None
+        return self
+
+    def __exit__(self, *args):
+        os.close(self.fd)
+        self.path.unlink()
+
+
+def library_identity(api: LocalAPI, item: dict) -> dict:
+    """Validate response identity, allowing /users/0 only as an explicit alias."""
+    match = re.search(r'/api/(users|groups)/(\d+)$', api.base_url)
+    kind, number = ('user' if match[1] == 'users' else 'group'), int(match[2])
+    actual = item.get('library')
+    if not isinstance(actual, dict) or actual.get('type') != kind:
+        raise ExportError('API response library type mismatch')
+    ident = actual.get('id')
+    if not str(ident).isdigit() or (number != int(ident) and not (kind == 'user' and number == 0)):
+        raise ExportError('API response library ID mismatch')
+    return {'type': kind, 'id': int(ident)}
+
+
 def _data(item):
     if not isinstance(item, dict) or not isinstance(item.get('data'), dict):
         raise ExportError('Invalid Zotero item metadata')
     return item['data']
 
 
-def export_library(out, base_url=DEFAULT_BASE_URL, items=None, *, timeout=30):
+def export_library(out, base_url=DEFAULT_BASE_URL, items=None, *, timeout=30, refresh=False):
+    root = Path(os.path.abspath(out))
+    for parent in (root, *root.parents):
+        if parent.is_symlink() or (hasattr(parent, 'is_junction') and parent.is_junction()):
+            raise ExportError('Export root must not contain links')
+    with FileLock(root.parent / f'.{root.name}.zotero-export.lock'):
+        return _export_library(root, base_url, items, timeout=timeout, refresh=refresh)
+
+
+def _export_library(out, base_url=DEFAULT_BASE_URL, items=None, *, timeout=30, refresh=False):
     """Export paper attachments, retaining no_pdf/error/duplicate alias records.
 
     IDs are item keys, with an attachment suffix for papers having multiple PDFs.
@@ -188,6 +296,17 @@ def export_library(out, base_url=DEFAULT_BASE_URL, items=None, *, timeout=30):
     for parent in (root, *root.parents):
         if parent.is_symlink() or (hasattr(parent, 'is_junction') and parent.is_junction()):
             raise ExportError('Export root must not contain links')
+    owner = f'zotero-export:{api.base_url}'
+    manifest = root / '.zotero-export-state.json'
+    managed = read_owned(manifest, owner) or {}
+    # Check every owned output before any fetch or publication.
+    for name, digest in managed.items():
+        if name not in ('library.json', 'ids.tsv'):
+            raise ExportError('Invalid managed manifest path')
+        path = root / name
+        if not path.is_file() or sha256(path.read_bytes()) != digest:
+            raise ExportError(f'Existing export differs; refusing overwrite: {path}')
+        _check_destination(path, path.read_bytes())
     records, seen, found = [], {}, set()
     # Materialize pagination first so listing failure cannot leave a partial batch.
     top = list(api.items('/items/top'))
@@ -199,6 +318,7 @@ def export_library(out, base_url=DEFAULT_BASE_URL, items=None, *, timeout=30):
         try:
             valid_key(key)
             found.add(key)
+            record['library'] = library_identity(api, item)
             data = _data(item)
             if data.get('deleted') or data.get('itemType') not in PAPER_TYPES:
                 continue
@@ -240,10 +360,17 @@ def export_library(out, base_url=DEFAULT_BASE_URL, items=None, *, timeout=30):
     ids = ''.join(f'{rec["path"]}\t{rec["id"]}\n' for rec in records if rec['status'] == 'ready').encode('utf-8')
     outputs = [(root / 'library.json', library), (root / 'ids.tsv', ids)]
     # Detect either manifest conflict before publishing either manifest.
+    previous = {}
     for path, raw in outputs:
-        _check_destination(path, raw)
+        if refresh and path.name in managed:
+            previous[path] = path.read_bytes()
+            _check_destination(path, previous[path])
+        else:
+            _check_destination(path, raw)
+            previous[path] = None
     for path, raw in outputs:
-        _atomic_write(path, raw)
+        replace_checked(path, raw, previous[path])
+    write_owned(manifest, {path.name: sha256(raw) for path, raw in outputs}, owner)
     return records
 
 
@@ -252,9 +379,10 @@ def main(argv=None):
     parser.add_argument('--out', required=True, help='Export work directory')
     parser.add_argument('--base-url', default=DEFAULT_BASE_URL, help='Loopback Zotero API or server root')
     parser.add_argument('--items', nargs='+', help='Optional Zotero top-level item keys')
+    parser.add_argument('--refresh', action='store_true', help='Refresh only hash-verified managed manifests')
     args = parser.parse_args(argv)
     try:
-        records = export_library(args.out, args.base_url, args.items)
+        records = export_library(args.out, args.base_url, args.items, refresh=args.refresh)
     except (OSError, ValueError, HTTPException) as exc:
         print(f'Export failed: {exc}', file=sys.stderr)
         return 1

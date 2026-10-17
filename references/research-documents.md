@@ -72,13 +72,13 @@ python scripts/build_research_document.py \
    - 期刊文献常附带独立补充材料（如 Elsevier 的 `mmc1.pdf`、Nature/Science 的 `Supporting Online Material`）；
    - 出版社制作的 SI PDF 属性 title 经常直接沿用主文标题；系统内置附录标题变体容错机制（自动支持 `Supplemental Information`、`Supporting Information`、`Supplementary Material`、`Appendix` 等后缀），放行合法衍生版本；
    - **跨文档自动双链与 S 编号隔离**：
-     - 图表审核引擎自动识别 `Figure S1`、`Fig. S1`、`Table S1`、`Scheme S1` 与 `附图 S1`，统一纳入 `supplemental:` 独立命名空间，杜绝与正文图号发生串号或错误聚类；
-     - 构建主文时传入 `--si-doc <SI文档名>`，自动将正文中的 SI 引用转换为带锚点的 Obsidian 双链 `[[<SI文档名>#Figure S1|Figure S1]]`，并在文末生成补充材料导读；构建 SI 时传入 `--supplement-to <主文档名>`，顶部自动注入导读卡片，且两者在 frontmatter 中分别写入 `has_supplement` 与 `supplement_to`，形成完整双向知识网络。
+     - 图表审核引擎自动识别 `Figure S1`、`Fig. S1`、`Table S1`、`Scheme S1`、`Supplemental/Supplementary Figure 1`、`Supplementary Note 1` 与 `附图 S1`，统一纳入 `supplemental:` 独立命名空间，杜绝与正文图号发生串号或错误聚类；
+     - 构建主文时传入 `--si-doc <SI文档名>`，自动将正文中的 SI 图表引用转换为带锚点的 Obsidian 双链 `[[<SI文档名>#Figure S1|Figure S1]]`，并在文末生成补充材料导读。`Note` 引用链接到整篇 SI，因为构建器不会为 Note 生成独立标题；现有链接、行内代码与围栏代码保持不变。构建 SI 时传入 `--supplement-to <主文档名>`，顶部自动注入导读卡片，且两者在 frontmatter 中分别写入 `has_supplement` 与 `supplement_to`。跨目录校验主文时必须传入 `--resource-root`（主文与 SI 的共同父目录）。
    - 交付建议：输出至独立目录（如 `{{firstCreator}} - {{year}} - {{title}} - Supplemental Information`），并通过 `--file` 传入专有文件名，避免与主篇同名冲突。
 3. **双栏阅读流保持**：
    - 科研论文默认使用 `--reading-order source`，保留 OCR 按物理页核对的阅读流，避免双栏排版因几何高度重叠而发生栏间交错。
 4. **Windows 路径安全**：
-   - 内部原子写入器使用 `.tmp.` 短前缀生成临时文件，彻底规避长路径嵌套下触发 Windows 260 字符（`MAX_PATH`）限制。
+   - 写入使用临时文件加原子替换；枚举、读取、写入与校验统一使用扩展路径（`\\?\`，UNC 为 `\\?\UNC\`）。只给写入加前缀而枚举用普通 `rglob` 会漏掉超长路径文件，因此必须整条链路一致。
 5. **Obsidian 链接兼容**：
    - 生成的 `00-目录.md` 采用标准 URI 编码（`urllib.parse.quote`），原生支持 Obsidian 双链补全与跨平台文件打开。
 

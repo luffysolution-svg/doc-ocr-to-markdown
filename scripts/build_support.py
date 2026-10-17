@@ -8,6 +8,8 @@ import re
 import tempfile
 from pathlib import Path
 
+from portable_paths import safe_path, walk_files
+
 
 OWNERSHIP = '.build-ownership.json'
 RESERVED = {OWNERSHIP, '00-目录.md', 'build-report.json', 'images', 'agent'}
@@ -46,13 +48,13 @@ def asset_path(root: Path, value: str) -> Path:
 
 
 def read_items(folder: Path) -> tuple[list[dict], Path]:
-    if not folder.is_dir():
+    if not safe_path(folder).is_dir():
         raise ValueError(f'缺少 OCR 分片目录: {folder}')
-    lists = sorted([p for p in folder.rglob('*content_list.json') if not p.name.endswith('_v2.json')])
+    lists = sorted([p for p in walk_files(folder, '*content_list.json') if not p.name.endswith('_v2.json')])
     if len(lists) != 1:
         raise ValueError(f'{folder}: 需要唯一 content_list.json，找到 {len(lists)} 个')
     path = contained(folder, lists[0].relative_to(folder).as_posix())
-    items = json.loads(path.read_text(encoding='utf-8'))
+    items = json.loads(safe_path(path).read_text(encoding='utf-8'))
     if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
         raise ValueError(f'无效 OCR 列表: {path}')
     # Internal provenance is assigned here/from the manifest, never trusted from OCR.
@@ -149,10 +151,10 @@ class Publisher:
         if root.is_symlink() or (hasattr(root, 'is_junction') and root.is_junction()):
             raise ValueError(f'输出目录不能是链接: {root}')
         ledger = contained(self.state_root, OWNERSHIP)
-        if not ledger.exists():
+        if not safe_path(ledger).exists():
             ledger = contained(root, OWNERSHIP)
-        if ledger.exists():
-            data = json.loads(ledger.read_text(encoding='utf-8'))
+        if safe_path(ledger).exists():
+            data = json.loads(safe_path(ledger).read_text(encoding='utf-8'))
             if data.get('version') != 1 or not isinstance(data.get('files'), dict):
                 raise ValueError('所有权清单格式无效')
             self.owned = data['files']
@@ -163,41 +165,41 @@ class Publisher:
 
     def check(self, name: str) -> Path:
         path = contained(self.root, name)
-        if path.exists():
-            if not path.is_file() or name not in self.owned:
+        if safe_path(path).exists():
+            if not safe_path(path).is_file() or name not in self.owned:
                 raise ValueError(f'拒绝覆盖非生成文件: {path}')
-            if digest(path.read_bytes()) != self.owned[name] and not self.overwrite:
+            if digest(safe_path(path).read_bytes()) != self.owned[name] and not self.overwrite:
                 raise ValueError(f'生成文件有人工修改，需 --overwrite: {path}')
         return path
 
     def previous_report(self) -> dict:
         path = contained(self.state_root, 'build-report.json')
-        if not path.exists():
+        if not safe_path(path).exists():
             path = self.check('build-report.json')
-        if not path.exists():
+        if not safe_path(path).exists():
             return {'chapters': [], 'review': {}}
-        data = json.loads(path.read_text(encoding='utf-8'))
+        data = json.loads(safe_path(path).read_text(encoding='utf-8'))
         if not isinstance(data.get('chapters'), list) or not isinstance(data.get('review', {}), dict):
             raise ValueError('build-report.json 格式无效')
         return data
 
     def publish(self, stage: Path) -> None:
         report_path = stage / 'build-report.json'
-        report_data = report_path.read_bytes() if report_path.exists() else None
-        files = {p.relative_to(stage).as_posix(): p.read_bytes()
-                 for p in stage.rglob('*') if p.is_file() and p != report_path}
+        report_data = safe_path(report_path).read_bytes() if safe_path(report_path).exists() else None
+        files = {p.relative_to(stage).as_posix(): safe_path(p).read_bytes()
+                 for p in walk_files(stage) if safe_path(p).is_file() and p != report_path}
         # Check every ancestor before writing delivery files, including ancestors
         # above a missing state_root (Path.exists() alone cannot detect those).
         for directory in (self.root, self.state_root):
             for parent in (directory, *directory.parents):
                 if parent.is_symlink() or (hasattr(parent, 'is_junction') and parent.is_junction()):
                     raise ValueError(f'路径包含链接: {parent}')
-                if parent.exists() and not parent.is_dir():
+                if safe_path(parent).exists() and not safe_path(parent).is_dir():
                     raise ValueError(f'父路径不是目录: {parent}')
         state_targets = {name: contained(self.state_root, name)
                          for name in (OWNERSHIP, 'build-report.json')}
         for state_file in state_targets.values():
-            if state_file.exists() and not state_file.is_file():
+            if safe_path(state_file).exists() and not safe_path(state_file).is_file():
                 raise ValueError(f'构建状态不是文件: {state_file}')
         targets = {name: self.check(name) for name in files}
         # Case-folded names also protect outputs when generated on Windows.
@@ -206,7 +208,7 @@ class Publisher:
             raise ValueError('输出路径大小写冲突')
         for name, path in targets.items():
             for parent in path.parents:
-                if parent.exists() and not parent.is_dir():
+                if safe_path(parent).exists() and not safe_path(parent).is_dir():
                     raise ValueError(f'输出父路径不是目录: {parent}')
             if any(other.startswith(name.casefold() + '/') for other in names):
                 raise ValueError(f'输出文件与目录冲突: {name}')
@@ -219,34 +221,28 @@ class Publisher:
                                   ensure_ascii=False, indent=2) + '\n').encode('utf-8')
         writes.append((state_targets[OWNERSHIP], ledger_data))
         # Keep just the required original bytes; staged payloads above are reused.
-        originals = {path: path.read_bytes() if path.exists() else None for path, _ in writes}
+        originals = {path: safe_path(path).read_bytes() if safe_path(path).exists() else None for path, _ in writes}
         attempted = []
         created_dirs = []
 
         def make_parents(directory: Path) -> None:
             missing = []
-            while not directory.exists():
+            while not safe_path(directory).exists():
                 missing.append(directory)
                 directory = directory.parent
             for directory in reversed(missing):
-                directory.mkdir()
+                safe_path(directory).mkdir()
                 created_dirs.append(directory)
 
-        def _win_safe(p: Path | str) -> str:
-            s = os.path.abspath(str(p))
-            if os.name == 'nt' and not s.startswith('\\\\?\\'):
-                return '\\\\?\\' + s
-            return s
-
         def replace_bytes(path: Path, data: bytes) -> None:
-            fd, temporary = tempfile.mkstemp(prefix='.tmp.', suffix='.tmp', dir=path.parent)
+            fd, temporary = tempfile.mkstemp(prefix='.tmp.', suffix='.tmp', dir=safe_path(path.parent))
             try:
                 with os.fdopen(fd, 'wb') as stream:
                     stream.write(data)
-                os.replace(_win_safe(temporary), _win_safe(path))
+                os.replace(safe_path(temporary), safe_path(path))
             finally:
                 try:
-                    os.unlink(_win_safe(temporary))
+                    os.unlink(safe_path(temporary))
                 except OSError:
                     pass
 
@@ -261,7 +257,7 @@ class Publisher:
                 try:
                     if originals[path] is None:
                         try:
-                            os.unlink(_win_safe(path))
+                            os.unlink(safe_path(path))
                         except OSError:
                             pass
                     else:
@@ -270,7 +266,7 @@ class Publisher:
                     rollback_errors.append(rollback_error)
             for directory in reversed(created_dirs):
                 try:
-                    directory.rmdir()  # Only our own empty directories; never recurse.
+                    safe_path(directory).rmdir()  # Only our own empty directories; never recurse.
                 except OSError:
                     pass
             if rollback_errors:

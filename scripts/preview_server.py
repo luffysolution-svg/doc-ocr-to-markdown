@@ -24,10 +24,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote
 
-import markdown
 from console_output import safe_print as print
 
 from normalize_math import scan_math, math_issues
+from portable_paths import safe_path, read_text
+from markdown_resources import markdown_parser, parse_resources, resolve_resource, anchor_ids
 CDN = 'https://cdn.jsdelivr.net/npm/katex@0.19.0/dist'
 IMAGE_TYPES = {
     '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -78,7 +79,19 @@ def render_markdown(text: str) -> str:
             pieces.extend((before, key))
         cursor = span.end()
     pieces.append(text[cursor:])
-    body = markdown.markdown(''.join(pieces), extensions=['tables', 'fenced_code', 'footnotes'])
+    parser = markdown_parser()
+    # Emit the same heading IDs accepted by the target-anchor validator.
+    counts = {}
+    def heading(tokens, idx, options, env):
+        inline = tokens[idx + 1]
+        title = ''.join(c.content for c in inline.children or [] if c.type != 'html_inline').strip()
+        slug = re.sub(r'[^\w\- ]', '', title.lower()).replace(' ', '-')
+        count = counts.get(slug, 0)
+        counts[slug] = count + 1
+        tokens[idx].attrSet('id', slug + (f'-{count}' if count else ''))
+        return parser.renderer.renderToken(tokens, idx, options, env)
+    parser.renderer.rules['heading_open'] = heading
+    body = parser.render(''.join(pieces))
     for key, value in formulas:
         body = body.replace(f'<p>{key}</p>', value).replace(key, value)
     for issue in issues:
@@ -134,18 +147,41 @@ class Handler(BaseHTTPRequestHandler):
         if not target.is_relative_to(base):
             self.send_error(403)
             return
-        if not target.is_file() or target.suffix.lower() != '.md':
+        if not safe_path(target).is_file() or target.suffix.lower() != '.md':
             self.send_error(404, 'Not found')
             return
         self._markdown(target)
 
     def _markdown(self, target: Path):
         root: Path = STATE['root']
-        body = render_markdown(target.read_text(encoding='utf-8'))
+        source = read_text(target)
+        body = render_markdown(source)
+        # Resolve Obsidian basename links to routes within this served root.
+        # Root-parent SI documents can be validated, but are deliberately not
+        # exposed outside this HTTP root's containment boundary.
+        from urllib.parse import urlsplit
+        for resource in parse_resources(source):
+            if resource.syntax != 'wiki':
+                continue
+            try:
+                resolved = resolve_resource(resource, target, Path(root))
+                if resolved and resolved.is_relative_to(root):
+                    fragment = urlsplit(resource.destination).fragment
+                    old_target, marker, old_fragment = resource.destination.partition('#')
+                    old = quote(old_target, safe='/') + (('#' + quote(old_fragment)) if marker else '')
+                    destination = '/' + quote(resolved.relative_to(root).as_posix(), safe='/')
+                    if fragment:
+                        heading_slug = re.sub(r'[^\w\- ]', '', fragment.lower()).replace(' ', '-')
+                        destination += '#' + quote(heading_slug)
+                    body = body.replace('="' + html.escape(old, quote=True) + '"',
+                                        '="' + html.escape(destination, quote=True) + '"')
+            except ValueError:
+                pass  # Validation reports the missing/ambiguous target.
+        expected = len(scan_math(source)[0])
         local = STATE['katex'] != CDN and Path(STATE['katex']).is_dir()
         prefix = '/katex-local' if local else CDN
         page = (
-            '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+            f'<!doctype html><html lang="zh-CN" data-expected-formulas="{expected}"><head><meta charset="utf-8">'
             f'<title>{html.escape(target.stem)}</title>'
             f'<link rel="stylesheet" href="{prefix}/katex.min.css">'
             f'<style>{CSS}</style></head><body>'
@@ -161,7 +197,19 @@ class Handler(BaseHTTPRequestHandler):
             'document.documentElement.dataset.formulas=String(nodes.length);'
             'document.documentElement.dataset.rendered=String(rendered);'
             'document.documentElement.dataset.mathErrors=String(document.querySelectorAll(".math-error").length);'
-            'document.documentElement.dataset.ready="true";'
+            'const stats=document.documentElement.dataset;'
+            'stats.expectedFormulas=stats.expectedFormulas||String(nodes.length);'
+            'stats.formulaCountMatches=String(Number(stats.expectedFormulas)===nodes.length);'
+            'stats.hostCheck="Obsidian reading/live preview requires real-client verification";'
+            'const images=Array.from(document.querySelectorAll("img"));'
+            'stats.images=String(images.length);'
+            'const finish=()=>{stats.loadedImages=String(images.filter(i=>i.naturalWidth>0).length);'
+            'stats.imageErrors=String(images.filter(i=>!(i.naturalWidth>0)).length);'
+            'stats.ready="true";};'
+            'if(images.every(i=>i.complete))finish();else '
+            'Promise.all(images.map(i=>i.complete?Promise.resolve():new Promise(resolve=>{'
+            'i.addEventListener("load",resolve,{once:true});i.addEventListener("error",resolve,{once:true});'
+            '}))).then(finish);'
             '</script></body></html>'
         )
         data = page.encode('utf-8')
@@ -172,10 +220,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _file(self, target: Path, content_type: str | None = None):
-        if not target.is_file():
+        if not safe_path(target).is_file():
             self.send_error(404)
             return
-        data = target.read_bytes()
+        data = safe_path(target).read_bytes()
         self.send_response(200)
         self.send_header('Content-Type', content_type or mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
         self.send_header('Content-Length', str(len(data)))
@@ -194,7 +242,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    if not root.is_dir():
+    if not safe_path(root).is_dir():
         raise SystemExit(f'目录不存在：{root}')
     STATE['root'] = root
     if args.katex_dir:

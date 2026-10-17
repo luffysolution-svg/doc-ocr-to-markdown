@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
+import math
 import collections
 import json
 import re
@@ -25,14 +27,37 @@ from pathlib import Path
 from build_support import contained, relative_name
 from console_output import safe_print as print
 
-FIG_NUM_PATTERN = re.compile(r'图\s*(\d+(?:[.\-．]\d+)*)')
-ZH_SUPP_FIG_PATTERN = re.compile(r'(?:附图\s*(?:S)?|图\s*S)\s*(\d+(?:[.\-．]\d+)*)', re.IGNORECASE)
-# English references in the caption body are not caption labels. Do not use
-# MULTILINE: a wrapped "Fig. 2" reference is still part of the caption body.
-EN_FIG_PREFIX_PATTERN = re.compile(
-    r'\A\s*(?P<extended>Extended\s+Data\s+)?(?:Figure|Fig\.?)\s*'
-    r'(?P<supp>S)?(?P<number>\d+(?:[.\-．]\d+)*)\b', re.IGNORECASE)
-PANEL_TAG_PATTERN = re.compile(r'^\s*\(?[a-zA-Z]\)?\s*$')
+from figure_identifiers import caption_keys
+from portable_paths import safe_path, walk_files, read_text
+
+PANEL_TAG_PATTERN = re.compile(r'^\s*[（(]([a-zA-Z])[）)](?:\s|$)')
+PANEL_EVIDENCE = re.compile(r'[（(]([a-zA-Z])[）)]')
+
+
+def _valid_box(box):
+    return (isinstance(box, (list, tuple)) and len(box) == 4
+            and all(type(v) in (int, float) and math.isfinite(v) for v in box)
+            and 0 <= box[0] < box[2] <= 1000 and 0 <= box[1] < box[3] <= 1000)
+
+
+def _neighbors(left, right):
+    if not _valid_box(left) or not _valid_box(right) or left == right:
+        return False
+    wx = min(left[2] - left[0], right[2] - right[0])
+    hy = min(left[3] - left[1], right[3] - right[1])
+    ox = max(0, min(left[2], right[2]) - max(left[0], right[0]))
+    oy = max(0, min(left[3], right[3]) - max(left[1], right[1]))
+    dx = max(0, max(left[0], right[0]) - min(left[2], right[2]))
+    dy = max(0, max(left[1], right[1]) - min(left[3], right[3]))
+    return (oy / hy >= .7 and dx <= min(100, wx * .5)
+            or ox / wx >= .7 and dy <= min(100, hy * .5))
+
+
+def _snapshot(block):
+    typ = block['type']
+    return {key: deepcopy(block.get(key, default)) for key, default in (
+        ('type', None), ('img_path', ''), ('bbox', None),
+        (f'{typ}_caption', []), (f'{typ}_footnote', []))}
 
 
 def extract_captions(block: dict) -> list[str]:
@@ -46,32 +71,8 @@ def extract_footnotes(block: dict) -> list[str]:
 
 
 def extract_figure_numbers(captions: list[str]) -> list[str]:
-    """Keep Chinese numbering; recognize English labels only as explicit prefixes.
-
-    Main Figure/Fig. labels share the existing numeric namespace with 图.
-    Extended Data labels use ``extended-data:`` so Fig. 1 cannot cluster with
-    Extended Data Fig. 1. Supporting Information labels (Figure S1, Fig. S1, 图 S1)
-    use ``supplemental:`` namespace. Each caption list entry can supply one English label.
-    """
-    numbers = []
-    for cap in captions:
-        english = EN_FIG_PREFIX_PATTERN.match(cap)
-        if english:
-            num = english.group('number').replace('．', '.').replace('-', '.')
-            if english.group('extended'):
-                num = f'extended-data:{num}'
-            elif english.group('supp'):
-                num = f'supplemental:S{num}'
-            numbers.append(num)
-        for m in ZH_SUPP_FIG_PATTERN.finditer(cap):
-            num = re.sub(r'\s+', '', m.group(1)).replace('．', '.').replace('-', '.')
-            numbers.append(f'supplemental:S{num}')
-        for m in FIG_NUM_PATTERN.finditer(cap):
-            # Avoid re-adding if already added as supplemental
-            num = re.sub(r'\s+', '', m.group(1)).replace('．', '.').replace('-', '.')
-            if f'supplemental:S{num}' not in numbers:
-                numbers.append(num)
-    return list(dict.fromkeys(numbers))
+    """Recognize only explicit caption labels with shared namespace/kind rules."""
+    return caption_keys(captions)
 
 
 def box_overlap_area(b1: list[float], b2: list[float]) -> float:
@@ -135,41 +136,23 @@ def audit_page_images(page_num: int, blocks: list[dict], confident_only: bool = 
         else:
             unnumbered.append((idx, img))
 
-    # Cluster unnumbered sub-panels (e.g. (b), (c)) with their corresponding figure
-    if len(by_num) == 1 and unnumbered:
-        num = next(iter(by_num))
-        first_group = by_num[num]
-        ref_box = first_group[0][1].get('bbox') or [0, 0, 1000, 1000]
-        for u_idx, u_img in unnumbered:
-            u_caps = extract_captions(u_img)
-            is_panel = any(PANEL_TAG_PATTERN.match(c) for c in u_caps) or not u_caps
-            u_box = u_img.get('bbox') or [0, 0, 0, 0]
-            y_overlap = max(0, min(ref_box[3], u_box[3]) - max(ref_box[1], u_box[1]))
-            if is_panel or y_overlap > 0:
-                first_group.append((u_idx, u_img))
-        first_group.sort(key=lambda x: x[0])
-    elif len(by_num) > 1 and unnumbered:
-        for u_idx, u_img in unnumbered:
-            u_caps = extract_captions(u_img)
-            is_panel = any(PANEL_TAG_PATTERN.match(c) for c in u_caps) or not u_caps
-            u_box = u_img.get('bbox') or [0, 0, 0, 0]
-            if is_panel and u_box != [0, 0, 0, 0]:
-                best_num, best_dist = None, 1000.0
-                for num, grp in by_num.items():
-                    target_box = grp[0][1].get('bbox') or [0, 0, 1000, 1000]
-                    dist = abs((target_box[1] + target_box[3]) / 2 - (u_box[1] + u_box[3]) / 2)
-                    if dist < best_dist and dist < 350:
-                        best_dist = dist
-                        best_num = num
-                if best_num:
-                    by_num[best_num].append((u_idx, u_img))
-                    by_num[best_num].sort(key=lambda x: x[0])
+    # A panel must carry an explicit label and be close to exactly one numbered
+    # group. Empty captions and remote same-row figures are not panel evidence.
+    for u_idx, u_img in unnumbered:
+        caps = extract_captions(u_img)
+        if not caps or not all(PANEL_TAG_PATTERN.match(c) for c in caps):
+            continue
+        candidates = [num for num, grp in by_num.items() if any(
+            _neighbors(u_img.get('bbox'), block.get('bbox')) for _, block in grp)]
+        if len(candidates) == 1:
+            by_num[candidates[0]].append((u_idx, u_img))
+            by_num[candidates[0]].sort(key=lambda pair: pair[0])
 
     # Cluster images sharing the same figure number
     for num, group in by_num.items():
         if len(group) > 1:
             indices = [idx for idx, _ in group]
-            boxes = [b.get('bbox') for _, b in group if b.get('bbox')]
+            boxes = [b['bbox'] for _, b in group if _valid_box(b.get('bbox'))]
             if boxes:
                 union_b = [
                     max(0, int(min(b[0] for b in boxes)) - 3),
@@ -181,37 +164,59 @@ def audit_page_images(page_num: int, blocks: list[dict], confident_only: bool = 
                 all_caps = []
                 for _, b in group:
                     for c in extract_captions(b):
-                        if c not in all_caps and not PANEL_TAG_PATTERN.match(c):
+                        if c not in all_caps and not re.fullmatch(r'\s*[（(][a-zA-Z][）)]\s*', c):
                             all_caps.append(c)
 
                 first_idx, first_block = group[0]
                 typ = first_block.get('type', 'image')
-                old_snap = {
-                    'type': typ,
-                    'img_path': first_block.get('img_path', ''),
-                    'bbox': first_block.get('bbox', [0, 0, 0, 0]),
-                    f'{typ}_caption': extract_captions(first_block),
-                    f'{typ}_footnote': extract_footnotes(first_block),
-                }
+                old_snap = _snapshot(first_block)
 
-                # Assess confidence
-                has_anomaly = any(a.get('kind') == 'multiple_figure_numbers' for a in page_anomalies)
-                union_area = box_area(union_b)
-                is_confident = (
-                    not has_anomaly and
-                    0 < union_area <= 920000 and
-                    (len(by_num) == 1 or all(
-                        any(PANEL_TAG_PATTERN.match(c) for c in extract_captions(b)) or
-                        extract_figure_numbers(extract_captions(b)) == [num]
-                        for _, b in group
-                    ))
-                )
+                # Distinct explicit panel labels or the same caption identity on
+                # every fragment, connected geometry, and no intervening prose.
+                numbered = all(extract_figure_numbers(extract_captions(b)) == [num]
+                               for _, b in group)
+                tags = [set(PANEL_EVIDENCE.findall(' '.join(extract_captions(b))))
+                        for _, b in group]
+                panel_evidence = all(tags) and len(set.union(*tags)) >= len(group)
+                reached = {0}
+                while True:
+                    added = {j for j, (_, block) in enumerate(group) if j not in reached
+                             and any(_neighbors(block.get('bbox'), group[k][1].get('bbox'))
+                                     for k in reached)}
+                    if not added:
+                        break
+                    reached.update(added)
+                has_anomaly = any(len(extract_figure_numbers(extract_captions(b))) > 1
+                                  for _, b in group)
+                intervening = any(blocks[j].get('type') not in ('image', 'chart')
+                                  and str(blocks[j].get('text', '')).strip()
+                                  for j in range(min(indices), max(indices)))
+                foreign_inside = any(idx not in indices and _valid_box(b.get('bbox'))
+                                     and box_overlap_area(b['bbox'], union_b) > 0
+                                     for idx, b in images)
+                text_inside = any(
+                    idx not in indices and _valid_box(block.get('bbox'))
+                    and block.get('type') in ('text', 'body_text', 'equation', 'table', 'list')
+                    and box_overlap_area(block['bbox'], union_b) > 0
+                    and not any(box_overlap_area(block['bbox'], box) >= .9 * box_area(block['bbox'])
+                                for box in boxes)
+                    for idx, block in enumerate(blocks))
+                unique_locations = all(sum(block.get('bbox') == b.get('bbox') for block in blocks) == 1
+                                       for _, b in group)
+                is_confident = (not has_anomaly and not intervening and not foreign_inside and not text_inside
+                                and unique_locations and not any(b.get('_figure_boundary') for _, b in group)
+                                and all(_valid_box(b.get('bbox')) for _, b in group)
+                                and len(reached) == len(group)
+                                and 0 < box_area(union_b) <= 920000
+                                and sum(box_area(box) for box in boxes) >= .5 * box_area(union_b)
+                                and (numbered or panel_evidence))
                 confidence = 'high' if is_confident else 'manual_review'
                 if confident_only and not is_confident:
                     continue
 
                 reason = (f'待原页人工确认：第{page_num}页图号标识 {num} 的{len(group)}个图块'
                           '可能为碎片面板；候选外接框及碎块移除仅为草稿，尚未核实')
+                all_notes = list(dict.fromkeys(note for _, b in group for note in extract_footnotes(b)))
                 page_repairs.append({
                     'page': page_num,
                     'bbox': first_block.get('bbox'),
@@ -219,6 +224,7 @@ def audit_page_images(page_num: int, blocks: list[dict], confident_only: bool = 
                     'old': old_snap,
                     'new_bbox': union_b,
                     'image_caption': all_caps,
+                    'image_footnote': all_notes,
                     'confidence': confidence,
                     'reason': reason,
                 })
@@ -227,7 +233,7 @@ def audit_page_images(page_num: int, blocks: list[dict], confident_only: bool = 
                         'page': page_num,
                         'bbox': b.get('bbox'),
                         'action': 'skip',
-                        'old': '',
+                        'old': b.get('text', ''),
                         'confidence': confidence,
                         'reason': reason,
                     })
@@ -267,6 +273,9 @@ def generate_confident_repairs_for_blocks(blocks: list[dict]) -> list[dict]:
     all_repairs = []
     for page in sorted(by_page):
         _, reps, _ = audit_page_images(page, by_page[page], confident_only=True)
+        for record in reps:
+            record['reason'] = ('自动高置信度候选：同编号或独立面板标签，紧邻连通几何，无冲突图号与跨图正文；'
+                                '按完整外接框回源重裁，内容仍须原页复核')
         all_repairs.extend(reps)
     return all_repairs
 
@@ -280,12 +289,12 @@ def audit_workspace(root: Path, manifest_path: Path | None = None, confident_onl
     """
     root = root.resolve()
     raw_dir = root / 'raw' if (root / 'raw').is_dir() else root
-    if not raw_dir.is_dir():
+    if not safe_path(raw_dir).is_dir():
         raise ValueError(f'OCR directory does not exist: {raw_dir}')
     manifest = None
     selected_manifest = manifest_path if manifest_path is not None else root / 'manifest.json'
     if manifest_path is not None or selected_manifest.is_file():
-        manifest = json.loads(selected_manifest.read_text(encoding='utf-8'))
+        manifest = json.loads(read_text(selected_manifest))
         if not isinstance(manifest, dict) or not isinstance(manifest.get('parts'), list):
             raise ValueError('manifest requires a parts list')
 
@@ -303,13 +312,13 @@ def audit_workspace(root: Path, manifest_path: Path | None = None, confident_onl
             part_folder = contained(raw_dir, part_id)
             # Match the builder's unversioned content-list contract. Multiple
             # candidates must not depend on filesystem enumeration order.
-            clists = sorted([p for p in part_folder.rglob('*content_list.json') if not p.name.endswith('_v2.json')])
+            clists = sorted([p for p in walk_files(part_folder, '*content_list.json') if not p.name.endswith('_v2.json')])
             if len(clists) != 1:
                 raise ValueError(f'{part_folder}: expected one content_list.json, found {len(clists)}')
             clist = contained(raw_dir, clists[0].relative_to(raw_dir).as_posix())
             parts_to_scan.append((part_id, start_page, clist, part.get('end_page')))
     else:
-        for clist in sorted([p for p in raw_dir.rglob('*content_list.json') if not p.name.endswith('_v2.json')]):
+        for clist in sorted([p for p in walk_files(raw_dir, '*content_list.json') if not p.name.endswith('_v2.json')]):
             # A full relative filename distinguishes same-basename folders and
             # files, remains stable when another document is added, and is
             # identical whether the caller supplies ocr-work or ocr-work/raw.
@@ -323,7 +332,7 @@ def audit_workspace(root: Path, manifest_path: Path | None = None, confident_onl
     manifest_pages = {}
 
     for source_id, start_page, clist_path, end_page in parts_to_scan:
-        data = json.loads(clist_path.read_text(encoding='utf-8'))
+        data = json.loads(read_text(clist_path))
         if not isinstance(data, list) or any(not isinstance(block, dict) for block in data):
             raise ValueError(f'invalid OCR content list: {clist_path}')
         if end_page is not None and (type(end_page) is not int or end_page < start_page):

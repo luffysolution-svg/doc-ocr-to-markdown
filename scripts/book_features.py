@@ -80,12 +80,14 @@ def apply_repairs(blocks, repairs, pdf_path=None):
             raise ValueError(f'repair page out of bounds: {page}')
         if not isinstance(record.get('reason'), str) or not record['reason'].strip():
             raise ValueError('repair requires a nonempty reason')
+        if 'confidence' in record and record['confidence'] not in ('high', 'manual_review'):
+            raise ValueError('repair confidence must be high or manual_review')
         action = record.get('action', 'replace')
         if not isinstance(action, str) or action not in {'replace', 'skip', 'set_type', 'add_image', 'update_image'}:
             raise ValueError(f'unsupported repair action: {action!r}')
         image_fields = ('image_caption', 'image_footnote')
         if action in ('add_image', 'update_image'):
-            allowed = {'page', 'bbox', 'action', 'reason', *image_fields}
+            allowed = {'page', 'bbox', 'action', 'reason', 'confidence', *image_fields}
             allowed.update(('after',) if action == 'add_image' else ('old', 'new_bbox'))
             if record.keys() - allowed:
                 raise ValueError('image repair contains inapplicable fields')

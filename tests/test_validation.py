@@ -84,12 +84,14 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(r['status'], 'pass', r)
         self.assertEqual(r['errors'], [])
 
-    def test_chemical_state_notation_not_mistaken_for_link(self):
+    def test_chemical_state_fake_links_must_be_disambiguated(self):
         self.note('# Note\n\n![a](images/a.png)\n\n'
                   'Pt(s)|K3[Fe(CN)6](aq), K4[Fe(CN)6](aq)||Mn2+(aq)\n')
         r = self.report()
-        self.assertEqual(r['status'], 'pass', r)
-        self.assertEqual(r['errors'], [])
+        self.assertEqual(r['status'], 'fail', r)
+        self.assertTrue(any('化学物态' in e for e in r['errors']))
+        self.note('# Note\n\n' + r'K3\[Fe(CN)6\](aq)' + '\n')
+        self.assertEqual(self.report()['status'], 'pass')
 
     def test_closed_fences_in_containers_are_allowed(self):
         self.note('# Note\n\n> ```markdown\n> ![example](missing.png)\n> ```\n\n![a](images/a.png)\n')
@@ -128,6 +130,60 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(r['orphan_images'], ['images/unused.png'])
         self.assertTrue(any('images/unused.png' in warning for warning in r['warnings']))
         self.assertTrue(orphan.exists())
+
+    def test_resource_syntaxes_and_real_alt_tokens(self):
+        self.note('# Note\n\n![plain][img]\n\n[img]: images/a.png "title"\n\n'
+                  '![[images/a.png|preview]]\n\n<img src="images/a.png" alt="plain">\n')
+        report = self.report()
+        self.assertEqual(report['status'], 'pass', report)
+        self.assertEqual(report['total_images'], 3)
+        for image in ('![bad $x$](images/a.png)', '![a [nested] $x$][img]\n\n[img]: images/a.png',
+                      '<img src="images/a.png" alt="$x$">'):
+            self.note('# Note\n\n' + image)
+            self.assertTrue(any('图片说明' in e for e in self.report()['errors']))
+
+    def test_wiki_and_reference_target_anchors(self):
+        self.note('# Target\n\n## Figure S1\n\ntext ^block-one\n\n<a id="custom"></a>\n', 'target.md')
+        self.note('# Note\n\n[[target#Figure S1|SI]] [[target#^block-one]]\n'
+                  '[ref][r] <a href="target.md#custom">HTML</a>\n\n[r]: target.md#figure-s1\n')
+        self.assertEqual(self.report()['status'], 'pass', self.report())
+        self.note('# Note\n\n[[target#Absent]] [x](target.md#absent)\n')
+        self.assertEqual(sum('锚点不存在' in e for e in self.report()['errors']), 2)
+
+    def test_sibling_si_unique_and_ambiguous_lookup(self):
+        sibling = self.root.parent / 'SI'
+        sibling.mkdir()
+        (sibling / 'supplement.md').write_text('# SI\n\n## Figure S1\n', encoding='utf-8')
+        self.note('# Note\n\n[[supplement#Figure S1]]\n')
+        report = validate(self.root, None, resource_root=self.root.parent)
+        self.assertEqual(report['status'], 'pass', report)
+        self.assertEqual(report['documents'], 1)
+        other = self.root.parent / 'other'
+        other.mkdir()
+        (other / 'supplement.md').write_text('# Other\n', encoding='utf-8')
+        self.assertTrue(any('Ambiguous' in e for e in validate(self.root, None, resource_root=self.root.parent)['errors']))
+
+    def test_navigation_gate_is_explicit_for_library_callers(self):
+        self.note('# Note\n')
+        self.assertEqual(self.report()['status'], 'pass')
+        self.assertEqual(validate(self.root, None, require_navigation=True)['status'], 'fail')
+        self.note('# Index\n', '00-目录.md')
+        self.assertEqual(validate(self.root, None, require_navigation=True)['status'], 'pass')
+
+    def test_dependency_absence_cannot_pass(self):
+        from unittest.mock import patch
+        self.note('# Note\n\n![a](images/a.png)\n')
+        with patch('validate_output.Image', None):
+            self.assertEqual(self.report()['status'], 'fail')
+        with patch('validate_output.MarkdownIt', None):
+            self.assertEqual(self.report()['status'], 'fail')
+
+    def test_code_and_math_resources_not_validated(self):
+        self.note('# Note\n\n`![[missing.png]]`\n\n> ```md\n> <img src="missing.png">\n> ```\n\n'
+                  '$[x](missing)$\n\n<pre><img src="missing.png"></pre>\n')
+        report = self.report()
+        self.assertEqual(report['status'], 'pass', report)
+        self.assertEqual(report['total_images'], 0)
 
 
 if __name__ == '__main__':

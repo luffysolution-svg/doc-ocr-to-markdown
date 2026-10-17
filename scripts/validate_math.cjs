@@ -54,6 +54,38 @@ function structuralIssues(tex) {
       issues.push('Truncated or empty tag; Agent must review source');
     }
   }
+  let depth = 0;
+  for (let i = 0; i < tex.length; i++) {
+    if (escaped(tex, i)) continue;
+    if (tex[i] === '{') depth++;
+    else if (tex[i] === '}' && --depth < 0) break;
+  }
+  if (depth) issues.push('Unbalanced braces; Agent must review source');
+  function skeleton(body, includeText = false) {
+    let out = '';
+    for (let i = 0; i < body.length;) {
+      const group = /^\\(?:text[a-zA-Z]*|mbox|hbox|operatorname)\*?\s*\{/.exec(body.slice(i));
+      if (group) {
+        const end = groupEnd(body, i + group[0].length - 1);
+        if (end !== null) {
+          if (includeText) out += skeleton(body.slice(i + group[0].length, end - 1), true);
+          i = end; continue;
+        }
+      }
+      const command = /^\\(?:[A-Za-z]+|.)/s.exec(body.slice(i));
+      if (command) {
+        if (['\\left', '\\right', '\\middle'].includes(command[0])) return '';
+        i += command[0].length; continue;
+      }
+      out += body[i++];
+    }
+    return out;
+  }
+  const sk = skeleton(tex), visible = skeleton(tex, true);
+  const count = (s, c) => s.split(c).length - 1;
+  if ([['(', ')'], ['[', ']']].some(([a, b]) => count(sk, a) !== count(sk, b) && count(visible, a) !== count(visible, b))) {
+    issues.push('Unbalanced parentheses/brackets; Agent must review source');
+  }
   return issues;
 }
 function normalizeRecord(record) {

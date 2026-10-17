@@ -401,7 +401,7 @@ class ResearchEntryTests(unittest.TestCase):
 
         # 4. Independent PDF / Word document: extract from structured filename
         stem_en = 'Vaswani et al - 2017 - Attention Is All You Need'
-        self.assertEqual(metadata.format_zotero_basename(None, stem_en), 'Vaswani 等 - 2017 - Attention Is All You Need')
+        self.assertEqual(metadata.format_zotero_basename(None, stem_en), stem_en)
 
         stem_zh = '李四 等 - 2023 - 凝聚态计算物理导论'
         self.assertEqual(metadata.format_zotero_basename({}, stem_zh), '李四 等 - 2023 - 凝聚态计算物理导论')
@@ -416,7 +416,7 @@ class ResearchEntryTests(unittest.TestCase):
             'title': 'AI in Materials Science'
         }
         self.assertEqual(metadata.format_zotero_basename({}, 'paper_export', extra_candidates=candidates),
-                         'Smith 等 - 2024 - AI in Materials Science')
+                         'paper_export')
 
     def test_supplemental_title_variant_matching(self):
         main_title = 'Inverse Design of Solid-State Materials via a Continuous Representation'
@@ -500,9 +500,9 @@ class ResearchEntryTests(unittest.TestCase):
         )
         linked = metadata.link_supplemental_references(sample_text, 'Noh - 2019 - SI')
         self.assertIn('[[Noh - 2019 - SI#Figure S1|Figure S1]]', linked)
-        self.assertIn('[[Noh - 2019 - SI#Fig. S2|Fig. S2]]', linked)
+        self.assertIn('[[Noh - 2019 - SI#Figure S2|Fig. S2]]', linked)
         self.assertIn('[[Noh - 2019 - SI#Table S1|Table S1]]', linked)
-        self.assertIn('[[Noh - 2019 - SI#图 S1|图 S1]]', linked)
+        self.assertIn('[[Noh - 2019 - SI#Figure S1|图 S1]]', linked)
         self.assertIn('Figure S1 is untouched in code block', linked)
         self.assertIn('[[Existing#Figure S1|Figure S1]]', linked)
 
@@ -511,6 +511,73 @@ class ResearchEntryTests(unittest.TestCase):
         bannered = metadata.inject_supplement_banner(si_text, 'Noh - 2019 - Main')
         self.assertIn('> [!info] 关联主文', bannered)
         self.assertIn('本文档为 [[Noh - 2019 - Main]] 的补充材料', bannered)
+
+
+    def test_main_si_pair_draft_then_validated_rebuild_and_hashes(self):
+        main_text = 'Compare Fig. S1 and Table S1. `Fig. S1` stays code.'
+        self.content.write_text(json.dumps([{'type': 'text', 'text': main_text,
+            'page_idx': 0, 'bbox': [100, 300, 900, 400]}]), encoding='utf-8')
+        self.run_cli('--file', 'Main', '--si-doc', 'SI', success=False)
+        target = self.out / 'Main.md'
+        self.assertIn('[[SI#Figure S1|Fig. S1]]', target.read_text(encoding='utf-8'))
+        si_out, si_state = self.root / 'si-output', self.root / 'si-state'
+        self.content.write_text(json.dumps([
+            {'type': 'image', 'image_caption': 'Fig. S1. Results', 'page_idx': 0, 'bbox': [100, 300, 450, 600]},
+            {'type': 'table', 'table_caption': 'Table S1. Values', 'table_body': '<table><tr><td>Value</td></tr></table>',
+             'page_idx': 0, 'bbox': [100, 650, 900, 800]},
+        ]), encoding='utf-8')
+        command = self.command('--file', 'SI', '--supplement-to', 'Main')
+        command[command.index('--out') + 1] = str(si_out)
+        command[command.index('--state-dir') + 1] = str(si_state)
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        si_text = (si_out / 'SI.md').read_text(encoding='utf-8')
+        self.assertIn('## Figure S1', si_text)
+        self.assertIn('## Table S1', si_text)
+        self.assertIn('[[Main]]', si_text)
+        self.content.write_text(json.dumps([{'type': 'text', 'text': main_text,
+            'page_idx': 0, 'bbox': [100, 300, 900, 400]}]), encoding='utf-8')
+        self.run_cli('--file', 'Main', '--si-doc', 'SI')
+        self.run_cli('--file', 'Main', '--si-doc', 'SI')
+        report = json.loads((self.state / 'research/research-report.json').read_text(encoding='utf-8'))
+        self.assertTrue(report['cache_hit'])
+        for folder, state in ((self.out, self.state), (si_out, si_state)):
+            ledger = json.loads((state / '.build-ownership.json').read_text(encoding='utf-8'))
+            for name, digest in ledger['files'].items():
+                self.assertEqual(metadata.sha256_file(folder / name), digest)
+        target.write_text(target.read_text(encoding='utf-8') + '\nManual note\n', encoding='utf-8')
+        self.run_cli('--file', 'Main', '--si-doc', 'SI', success=False)
+        self.assertIn('Manual note', target.read_text(encoding='utf-8'))
+
+    def test_si_rewriting_protects_code_existing_links_and_aliases(self):
+        protected = ('`Fig. S1`\n\n    Fig. S1\n\n'
+                     '[Fig. S1](existing.md)\n![[SI#Figure S1|Fig. S1]]\n'
+                     '<a href="elsewhere">Fig. S1</a>\n\n'
+                     '~~~text\nFig. S1\n~~~\n')
+        linked = metadata.link_supplemental_references(protected + '\nFig. S1 and 附图1.\n', 'SI')
+        self.assertTrue(linked.startswith(protected))
+        self.assertIn('[[SI#Figure S1|Fig. S1]] and [[SI#Figure S1|附图1]]', linked)
+        self.assertEqual(metadata.link_supplemental_references(linked, 'SI'), linked)
+
+    def test_classic_naming_effective_and_properties_are_not_facts(self):
+        self.run_cli('--naming', 'classic')
+        self.assertTrue((self.out / 'Research about material discovery.md').is_file())
+        self.assertEqual(metadata.format_zotero_basename({}, 'opaque export', extra_candidates={
+            'author': 'Unverified Author', 'creationDate': 'D:20250101', 'title': 'Unverified title'}), 'opaque export')
+
+
+class SupplementalLinkTests(unittest.TestCase):
+    def test_notes_link_to_document_while_figures_get_real_anchors(self):
+        from research_metadata import link_supplemental_references
+        text = ('See Supplementary Note 1, Supplemental Figure 2 and Figure S3. '
+                'Existing [[Figure S4]] and `Figure S5` stay untouched.')
+        linked = link_supplemental_references(text, 'SI')
+        self.assertIn('[[SI|Supplementary Note 1]]', linked)
+        self.assertIn('[[SI#Figure S2|Supplemental Figure 2]]', linked)
+        self.assertIn('[[SI#Figure S3|Figure S3]]', linked)
+        self.assertIn('[[Figure S4]]', linked)
+        self.assertIn('`Figure S5`', linked)
+        self.assertNotIn('[[SI#Note S1', linked)
 
 
 if __name__ == '__main__':

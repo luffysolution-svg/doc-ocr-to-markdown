@@ -135,7 +135,7 @@ class PreviewTests(unittest.TestCase):
             with self.subTest(path=relative):
                 status, body = self.get(quote('/' + relative))
                 self.assertEqual(status, 200)
-                self.assertIn(b'<h1>Chapter</h1>', body)
+                self.assertIn(b'<h1 id="chapter">Chapter</h1>', body)
                 self.assertIn(b'src="images/a.png"', body)
 
     def test_traversal_rejected_for_all_routes(self):
@@ -225,6 +225,7 @@ const nodes = payload.nodes.map(n => ({...n, classList: {
   add(c) { n.classes.push(c); }
 }}));
 const mockDocument = {documentElement:{dataset:{}}, querySelectorAll(selector) {
+  if (selector === 'img') return [{complete:true,naturalWidth:12}, {complete:true,naturalWidth:0}];
   return selector === '.math-error' ? nodes.filter(n => n.classList.contains('math-error')) : nodes;
 }};
 vm.runInNewContext(payload.script, {document:mockDocument, katex: {render(tex, node, options) {
@@ -239,7 +240,14 @@ console.log(JSON.stringify({dataset:mockDocument.documentElement.dataset,
         self.assertEqual(result.returncode, 0, result.stderr)
         outcome = json.loads(result.stdout)
         self.assertEqual(outcome['actual'], 3)
-        self.assertEqual(outcome['dataset'], {'ready': 'true', 'formulas': '3', 'rendered': '3', 'mathErrors': '0'})
+        dataset = outcome['dataset']
+        self.assertEqual({k: dataset[k] for k in ('ready', 'formulas', 'rendered', 'mathErrors')},
+                         {'ready': 'true', 'formulas': '3', 'rendered': '3', 'mathErrors': '0'})
+        self.assertEqual(dataset['images'], '2')
+        self.assertEqual(dataset['loadedImages'], '1')
+        self.assertEqual(dataset['imageErrors'], '1')
+        self.assertEqual(dataset['formulaCountMatches'], 'true')
+        self.assertIn('Obsidian', dataset['hostCheck'])
 
 
 if __name__ == '__main__':

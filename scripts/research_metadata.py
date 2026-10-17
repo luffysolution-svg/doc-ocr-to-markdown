@@ -11,6 +11,8 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from figure_identifiers import LABEL_PATTERN, identifier_from_match
+from portable_paths import safe_path, walk_files, read_text
 
 FIELDS = ('title', 'document_type', 'authors', 'date', 'publication_title', 'volume',
           'issue', 'pages', 'doi', 'language', 'abstract', 'zotero_item_uri', 'url', 'keywords',
@@ -51,31 +53,42 @@ def link_supplemental_references(text: str, si_doc_name: str) -> str:
     into '[[<si_doc_name>#Figure S1|Figure S1]]' without altering code blocks
     or existing wikilinks.
     """
-    en_pattern = re.compile(
-        r'(?<!\[\[)(?<!#)\b(?P<label>(?:Figure|Fig\.?|Table|Scheme)\s+S\d+(?:[.\-]\d+)*)\b(?!\]\])',
-        re.IGNORECASE
-    )
-    zh_pattern = re.compile(
-        r'(?<!\[\[)(?<!#)(?P<label>(?:附图\s*(?:S)?|图\s*S)\s*\d+(?:[.\-]\d+)*)(?!\]\])'
-    )
+    from markdown_resources import rewrite_unprotected
 
-    def repl(m):
-        raw = m.group('label').strip()
-        return f'[[{si_doc_name}#{raw}|{raw}]]'
+    def replace(match):
+        identifier = identifier_from_match(match)
+        if identifier.namespace != 'supplemental':
+            return match.group()
+        raw = match.group()
+        # The SI builder synthesizes Figure/Table/Scheme headings, but not Note
+        # sections: anchoring a Note would point at a heading that never exists.
+        if identifier.kind == 'Note':
+            return f'[[{si_doc_name}|{raw}]]'
+        return f'[[{si_doc_name}#{identifier.heading}|{raw}]]'
 
-    lines = text.splitlines()
-    in_fence = False
-    result = []
-    for line in lines:
-        if line.strip().startswith('```') or line.strip().startswith('~~~'):
-            in_fence = not in_fence
-            result.append(line)
-            continue
-        if not in_fence:
-            line = en_pattern.sub(repl, line)
-            line = zh_pattern.sub(repl, line)
-        result.append(line)
-    return '\n'.join(result)
+    return rewrite_unprotected(text, lambda segment: LABEL_PATTERN.sub(replace, segment))
+
+
+def clean_document_link(value):
+    """Accept a plain note path or one wikilink; forbid anchor/alias injection."""
+    value = value.strip()
+    if value.startswith('[[') and value.endswith(']]'):
+        value = value[2:-2]
+    if not value or any(c in value for c in '[]#|') or any(ord(c) < 32 for c in value):
+        raise ValueError('supplement document must be a plain note name/path')
+    return value.removesuffix('.md')
+
+
+def prepare_research_markdown(text, metadata):
+    """Run all research transforms in staging, before Publisher hashes bytes."""
+    if metadata.get('has_supplement'):
+        name = clean_document_link(metadata['has_supplement'])
+        text = link_supplemental_references(text, name)
+        text = text.rstrip() + ('\n\n## 补充材料 (Supporting Information)\n\n'
+                               f'- 详见本文补充材料与附图：[[{name}]]\n')
+    if metadata.get('supplement_to'):
+        text = inject_supplement_banner(text, clean_document_link(metadata['supplement_to']))
+    return text
 
 
 def inject_supplement_banner(si_markdown_text: str, main_doc_name: str) -> str:
@@ -84,6 +97,8 @@ def inject_supplement_banner(si_markdown_text: str, main_doc_name: str) -> str:
         f'> [!info] 关联主文\n'
         f'> 本文档为 [[{main_doc_name}]] 的补充材料（Supporting Information / SI）。\n\n'
     )
+    if banner in si_markdown_text:
+        return si_markdown_text
     if '---' in si_markdown_text:
         parts = si_markdown_text.split('---', 2)
         if len(parts) >= 3 and parts[0].strip() == '':
@@ -94,7 +109,7 @@ def inject_supplement_banner(si_markdown_text: str, main_doc_name: str) -> str:
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open('rb') as stream:
+    with safe_path(path).open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(chunk)
     return digest.hexdigest()
@@ -181,7 +196,7 @@ def export_identity(payload: dict) -> str | None:
 def load_export(path: Path | None, identity: str | None, source_sha256: str) -> dict | None:
     if path is None:
         return None
-    payload = json.loads(path.read_text(encoding='utf-8-sig'))
+    payload = json.loads(read_text(path, encoding='utf-8-sig'))
     if isinstance(payload, list):
         candidates = [p for p in payload if isinstance(p, dict) and (
             export_identity(p) == identity if identity else p.get('sha256') == source_sha256)]
@@ -244,7 +259,7 @@ def metadata_from_export(payload: dict) -> dict:
 def inspect_pdf(path: Path) -> dict:
     """Physical-page preflight. Text-layer presence is never claimed as text accuracy."""
     import fitz
-    with fitz.open(path) as pdf:
+    with fitz.open(safe_path(path)) as pdf:
         if pdf.needs_pass:
             raise ValueError('Encrypted PDF needs an unlocked user-provided copy')
         if len(pdf) == 0:
@@ -459,7 +474,9 @@ def format_zotero_basename(metadata: dict | None = None, fallback_stem: str = ''
         if not isinstance(data, dict):
             data = metadata
 
-        creators = data.get('creators') or data.get('authors') or metadata.get('authors') or []
+        creators = ([c for c in data.get('creators', []) if isinstance(c, dict)
+                     and c.get('creatorType', 'author') == 'author']
+                    or data.get('authors') or metadata.get('authors') or [])
         if creators and isinstance(creators, list):
             first = creators[0]
             multi = len(creators) > 1
@@ -487,61 +504,13 @@ def format_zotero_basename(metadata: dict | None = None, fallback_stem: str = ''
 
         raw_title = data.get('title') or metadata.get('title') or ''
 
-    # Handle independent PDF / Word properties or extra candidates if fields are missing
-    if extra_candidates and isinstance(extra_candidates, dict):
-        if not first_creator and extra_candidates.get('author'):
-            author_str = str(extra_candidates['author']).strip()
-            if ';' in author_str:
-                first_raw = author_str.split(';')[0].strip()
-                multi = True
-            elif ',' in author_str and not re.search(r'^[A-Z][a-z]+,\s*[A-Z]', author_str):
-                first_raw = author_str.split(',')[0].strip()
-                multi = True
-            else:
-                first_raw = author_str
-                multi = False
-            if re.search(r'[\u4e00-\u9fff]', first_raw):
-                name = first_raw
-            elif ',' in first_raw:
-                name = first_raw.split(',')[0].strip()
-            else:
-                parts = first_raw.split()
-                name = parts[-1] if parts else first_raw
-            if name:
-                first_creator = f'{name} 等' if multi else name
-
-        if not year:
-            date_cand = str(extra_candidates.get('creationDate') or extra_candidates.get('modDate') or extra_candidates.get('date') or '')
-            m_year = re.search(r'(?:19|20)\d{2}', date_cand)
-            if m_year:
-                year = m_year.group(0)
-
-        if not raw_title and extra_candidates.get('title'):
-            raw_title = str(extra_candidates['title']).strip()
-
-    # If first_creator, year, or title are still missing, attempt pattern matching from fallback_stem
-    stem_str = fallback_stem.strip()
-    if stem_str:
-        stem_match = re.search(r'^(?P<author>[^-_\n]+?)\s*[-_–—]\s*(?P<year>19\d\d|20\d\d)\s*[-_–—]\s*(?P<title>.+)$', stem_str)
-        if stem_match:
-            stem_author = stem_match.group('author').strip()
-            stem_year = stem_match.group('year').strip()
-            stem_title = stem_match.group('title').strip()
-            if not first_creator and stem_author:
-                if re.search(r'\bet\s+al\.?|\bet\s+al\b|等\s*$', stem_author, re.I):
-                    clean_author = re.sub(r'\s*(?:et\s+al\.?|等)\s*$', '', stem_author, flags=re.I).strip()
-                    first_creator = f'{clean_author} 等' if clean_author else stem_author
-                else:
-                    first_creator = stem_author
-            if not year and stem_year:
-                year = stem_year
-            if not raw_title and stem_title:
-                raw_title = stem_title
-        elif not raw_title:
-            raw_title = stem_str
+    # Unverified document properties must never supply publication facts.
+    # The original filename is an opaque display fallback only.
+    if not raw_title:
+        raw_title = fallback_stem.strip()
 
     title = sanitize_filename_title(raw_title, max_length=100) if raw_title else ''
     parts = [p for p in (first_creator, year, title) if p]
     if not parts:
         return sanitize_filename_title(fallback_stem or 'document', max_length=100)
-    return ' - '.join(parts)
+    return sanitize_filename_title(' - '.join(parts), max_length=180)

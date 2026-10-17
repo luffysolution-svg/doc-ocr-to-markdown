@@ -32,7 +32,7 @@ class ResearchCoreTests(unittest.TestCase):
             {'type': 'image', 'bbox': [50, 100, 450, 400], 'image_caption': ['Fig. 1 | Main figure.']},
             {'type': 'image', 'bbox': [60, 110, 460, 410], 'image_caption': ['Extended Data Fig. 1 | Other figure.']},
         ]
-        self.assertEqual(figure_numbers(items), {'1', 'extended:1'})
+        self.assertEqual(figure_numbers(items), {'1', 'extended-data:1'})
         self.assertEqual(len(image_groups(items)), 2)
 
     def test_pdf_crops_keep_three_times_source_resolution(self):

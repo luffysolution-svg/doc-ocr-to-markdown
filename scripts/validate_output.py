@@ -38,6 +38,9 @@ except ImportError:
     Image = None
 
 from normalize_math import MATH_SPAN, paren_issues, scan_math, protected_markdown
+from portable_paths import safe_path as _safe_path, walk_files, read_text
+from markdown_resources import (parse_resources, resolve_resource, check_anchor,
+                                markdown_parser, mask_math)
 
 # 不该出现在交付内容里的编辑痕迹
 LEAK_PATTERNS = [
@@ -60,17 +63,11 @@ WARN_PATTERNS = [
 ]
 
 
-def _safe_path(p: Path) -> Path:
-    s = os.path.abspath(str(p))
-    if os.name == 'nt' and not s.startswith('\\\\?\\'):
-        return Path('\\\\?\\' + s)
-    return p
-
-
-def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tuple[list, list, dict]:
+def check_file(path: Path, images_dir: Path | None, image_hashes: Counter, *, root: Path | None = None, resource_root: Path | None = None) -> tuple[list, list, dict]:
     errors: list[str] = []
     warnings: list[str] = []
-    text = _safe_path(path).read_text(encoding='utf-8')
+    root = (root or (images_dir.parent if images_dir else path.parent)).resolve()
+    text = read_text(path)
     from markdown_metadata import mask_frontmatter
     text = mask_frontmatter(text)
     name = path.name
@@ -118,72 +115,53 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
     # 图片引用与链接
     images = tables = parsed_images = 0
     source_candidates = len(re.findall(r'(?<!\\)!\[[^\]\n]*\]\([^\)\n]*\)', text))
+    if MarkdownIt is None:
+        errors.append(f'{name}: 缺少依赖 markdown-it-py，无法校验资源')
+    if Image is None:
+        errors.append(f'{name}: 缺少依赖 Pillow，无法校验图片可解码性')
     if MarkdownIt is not None:
-        parser = MarkdownIt('commonmark', {'html': True}).enable('table')
-        text_for_parsing = text
-        if math_spans:
-            chars = list(text)
-            for span in math_spans:
-                for idx in range(span.start(), span.end()):
-                    if chars[idx] not in '\r\n':
-                        chars[idx] = ' '
-            text_for_parsing = ''.join(chars)
-        for token in parser.parse(text_for_parsing):
+        parser = markdown_parser()
+        for token in parser.parse(mask_math(text)):
             if token.type == 'fence' and token.map:
                 start, end = token.map
-                # A closed fence spans its content plus opening and closing lines,
-                # including when Markdown containers prefix the source lines.
-                if end - start < token.content.count('\n') + 2:
+                if end - start < token.content.count(chr(10)) + 2:
                     errors.append(f'{name}:{start + 1}: 代码围栏未闭合，后续图片可能无法显示')
-                if not token.info.strip() and re.search(r'!\[[^\]\n]*\]\(', token.content):
-                    warnings.append(f'{name}:{start + 1}: 无语言代码围栏内有图片引用，可能被遮蔽；'
-                                    '若为代码示例请标注 markdown 等语言')
+                if not token.info.strip() and re.search(r'!\[.*?\]\(', token.content):
+                    warnings.append(f'{name}:{start + 1}: 无语言代码围栏内有图片引用，可能被遮蔽；若为代码示例请标注 markdown 等语言')
             if token.type == 'table_open':
                 tables += 1
-            for child in token.children or []:
-                if child.type not in ('image', 'link_open'):
+        for resource in parse_resources(text):
+            is_image = resource.kind == 'image'
+            if is_image:
+                parsed_images += 1
+                # markdown-it stores the true alt source in content, not attrs.alt.
+                if any(c in resource.label for c in ('$', chr(92), '{', '}')):
+                    errors.append(f'{name}: 图片说明含公式符号「{resource.label[:40]}」')
+            elif resource.syntax == 'markdown' and resource.destination.lower() in ('aq', 's', 'l', 'g', 'sln', 'cr'):
+                errors.append(f'{name}: 化学物态疑似被解析为链接 {resource.destination}；请将配位方括号转义或放入公式')
+                continue
+            try:
+                target = resolve_resource(resource, path, resource_root or root)
+                if target is None:
+                    if is_image:
+                        errors.append(f'{name}: 图片使用绝对/远程地址 {resource.destination}')
                     continue
-                if child.type == 'image':
-                    parsed_images += 1
-                dest = child.attrGet('src' if child.type == 'image' else 'href')
-                if not dest:
+                if is_image and not target.is_relative_to(root):
+                    errors.append(f'{name}: 图片路径越出知识库 {resource.destination}')
                     continue
-                parts = urlsplit(dest)
-                if parts.scheme or parts.netloc:
-                    if child.type == 'image':
-                        errors.append(f'{name}: 图片使用绝对/远程地址 {dest}')
-                    continue
-                decoded = unquote(parts.path).replace('\\', '/')
-                target = (path.parent / decoded).resolve()
-                if child.type == 'image':
-                    asset_root = images_dir.parent.resolve() if images_dir else path.parent.resolve()
-                    if decoded.startswith('/') or not target.is_relative_to(asset_root):
-                        errors.append(f'{name}: 图片路径越出知识库 {dest}')
-                        continue
-                if not _safe_path(target).exists():
-                    if child.type == 'link_open' and decoded.lower() in ('aq', 's', 'l', 'g', 'sln', 'cr'):
-                        continue
-                    errors.append(f'{name}: 链接失效 {dest}')
-                    continue
-                if child.type == 'image':
+                if not check_anchor(resource, target):
+                    errors.append(f'{name}: 目标锚点不存在 {resource.destination}')
+                if is_image:
                     images += 1
-                    asset_root = images_dir.parent.resolve() if images_dir else path.parent.resolve()
-                    image_hashes[target.relative_to(asset_root).as_posix()] += 1
-                    alt = child.attrGet('alt') or ''
-                    if any(c in alt for c in ('$', '\\', '{', '}')):
-                        errors.append(f'{name}: 图片说明含公式符号（会破坏 image 标签）「{alt[:40]}」')
+                    image_hashes[target.relative_to(root).as_posix()] += 1
                     if Image is not None:
                         try:
                             with Image.open(_safe_path(target)) as im:
                                 im.verify()
                         except Exception as exc:
-                            errors.append(f'{name}: 图片损坏 {dest}: {exc}')
-    else:
-        for match in re.finditer(r'!\[(.*?)\]\((.*?)\)', text):
-            images += 1
-            target = (path.parent / unquote(match.group(2))).resolve()
-            if not target.exists():
-                errors.append(f'{name}: 链接失效 {match.group(2)}')
+                            errors.append(f'{name}: 图片损坏 {resource.destination}: {exc}')
+            except (ValueError, OSError) as exc:
+                errors.append(f'{name}: 链接失效 {resource.destination}: {exc}')
 
     return errors, warnings, {'file': name, 'characters': len(text), 'images': images,
                               'source_image_candidates': source_candidates,
@@ -191,17 +169,24 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
                               'tables': tables, 'math': len(math_spans)}
 
 
-def validate(root: Path, images_dir: Path | None) -> dict:
+def validate(root: Path, images_dir: Path | None, *, require_navigation: bool = False, resource_root: Path | None = None) -> dict:
     errors: list[str] = []
     warnings: list[str] = []
     documents = []
     image_hashes: Counter = Counter()
 
-    markdown_files = sorted(root.rglob('*.md'))
+    root = root.absolute()
+    markdown_files = walk_files(root, '*.md')
+    if require_navigation and not _safe_path(root / '00-目录.md').is_file():
+        errors.append('缺少导航入口 00-目录.md')
     if not markdown_files:
         errors.append(f'{root} 下没有 Markdown 文件')
     for path in markdown_files:
-        file_errors, file_warnings, summary = check_file(path, images_dir, image_hashes)
+        try:
+            file_errors, file_warnings, summary = check_file(path, images_dir, image_hashes, root=root, resource_root=resource_root)
+        except (ImportError, RuntimeError) as exc:
+            errors.append(f'{path.name}: 校验所需依赖不可用: {exc}')
+            continue
         errors.extend(file_errors)
         warnings.extend(file_warnings)
         documents.append(summary)
@@ -209,9 +194,9 @@ def validate(root: Path, images_dir: Path | None) -> dict:
     duplicates = [name for name, count in image_hashes.items() if count > 1]
 
     orphans = []
-    if images_dir and images_dir.exists():
-        orphans = sorted(f.relative_to(root).as_posix() for f in images_dir.rglob('*.*')
-                         if f.is_file() and f.relative_to(root).as_posix() not in image_hashes)
+    if images_dir and _safe_path(images_dir).exists():
+        orphans = sorted(f.relative_to(root).as_posix() for f in walk_files(images_dir)
+                         if f.relative_to(root).as_posix() not in image_hashes)
         if orphans:
             warnings.append(f'{len(orphans)} 张图片未被任何文档引用：' + '、'.join(orphans[:10]))
 
@@ -239,14 +224,16 @@ def main() -> None:
     parser.add_argument('root', help='知识库根目录')
     parser.add_argument('--images-dir', default=None, help='图片目录（相对 root），用于检查孤立图片')
     parser.add_argument('--json', action='store_true', help='输出 JSON')
+    parser.add_argument('--resource-root', help='跨文献资源查找根目录（不扩大待校验文本范围）')
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    if not root.is_dir():
+    if not _safe_path(root).is_dir():
         sys.exit(f'目录不存在：{root}')
     images_dir = (root / args.images_dir) if args.images_dir else None
 
-    report = validate(root, images_dir)
+    report = validate(root, images_dir, require_navigation=True,
+                      resource_root=Path(args.resource_root).resolve() if args.resource_root else None)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

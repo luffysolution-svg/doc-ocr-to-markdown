@@ -51,6 +51,24 @@ class PublisherTests(unittest.TestCase):
             publisher = Publisher(output)
         return publisher, stage
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows extended path regression')
+    def test_long_paths_publish_rebuild_and_detect_manual_edit(self):
+        from portable_paths import safe_path, walk_files
+        root = self.base / ('long-' + 'a' * 100) / ('b' * 100) / ('c' * 60)
+        output, stage = root / 'output', self.base / 'long-stage'
+        self.write(stage, {'00-目录.md': b'navigation', 'chapter.md': b'content'})
+        publisher = Publisher(output)
+        publisher.publish(stage)
+        self.assertEqual(safe_path(output / 'chapter.md').read_bytes(), b'content')
+        self.assertEqual(len(walk_files(output, '*.md')), 2)
+        Publisher(output).publish(stage)
+        safe_path(output / 'chapter.md').write_bytes(b'user edit')
+        with self.assertRaisesRegex(ValueError, '人工修改'):
+            Publisher(output).publish(stage)
+        self.assertEqual(safe_path(output / 'chapter.md').read_bytes(), b'user edit')
+        import shutil
+        shutil.rmtree(safe_path(self.base / ('long-' + 'a' * 100)))
+
     def test_reserved_chapter_root_names_are_casefolded(self):
         raw = self.base / 'raw'
         self.write(raw, {'part/book_content_list.json': b'[]'})

@@ -52,32 +52,16 @@ def group_end(text: str, start: int) -> int | None:
 
 
 def _block_ranges(text: str) -> list[tuple[int, int]]:
-    from markdown_metadata import frontmatter_end
-    metadata_end = frontmatter_end(text)
-    ranges = [(0, metadata_end)] if metadata_end else []
-    offset, fence, begin = 0, None, 0
-    for line in text.splitlines(keepends=True):
-        if offset < metadata_end:
-            offset += len(line)
-            continue
-        marker = re.match(r' {0,3}(`{3,}|~{3,})(.*)', line)
-        if fence:
-            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
-                ranges.append((begin, offset + len(line)))
-                fence = None
-        elif marker and (marker[1][0] != '`' or '`' not in marker[2]):
-            fence, begin = marker[1], offset
-        elif line.startswith(('    ', '\t')):
-            ranges.append((offset, offset + len(line)))
-        offset += len(line)
-    if fence:
-        ranges.append((begin, len(text)))
-    return ranges
+    from markdown_resources import code_ranges, _reference_definitions
+    return sorted(code_ranges(text) + [(m.start(), m.end()) for m in _reference_definitions(text)])
 
 
 def _protected_end(text: str, pos: int) -> int | None:
     if escaped(text, pos):
         return None
+    wiki = re.match(r'!?\[\[[^\n]+?\]\]', text[pos:])
+    if wiki:
+        return pos + wiki.end()
     if text[pos] == '`':
         run = re.match(r'`+', text[pos:])[0]
         end = re.search(r'(?<!`)`{' + str(len(run)) + r'}(?!`)', text[pos + len(run):])
@@ -483,43 +467,30 @@ def normalize_prose_brackets(text: str) -> str:
     Prevents Markdown/Obsidian link parser from intercepting explanatory brackets containing
     math or Chinese text, while preserving actual Markdown links, images, footnotes, and citations.
     """
-    spans, _ = scan_math(text)
-    if not spans:
-        def simple_repl(m: re.Match) -> str:
-            inner = m.group(1)
-            if re.fullmatch(r'[\d\s,–—\-]+', inner) or inner.startswith('^'):
-                return m.group(0)
-            if re.search(r'[\u4e00-\u9fff]', inner):
-                return f'［{inner}］'
-            return m.group(0)
-        return re.sub(r'(?<!\!)\[([^[\]\n]+)\](?!\(|\[|:)', simple_repl, text)
-
-    # Protect math spans with placeholders
-    masked_pieces = []
-    cursor = 0
-    math_map = {}
-    for i, span in enumerate(spans):
-        masked_pieces.append(text[cursor:span.start()])
-        ph = f'\x00MATH{i}\x00'
-        math_map[ph] = text[span.start():span.end()]
-        masked_pieces.append(ph)
-        cursor = span.end()
-    masked_pieces.append(text[cursor:])
-    masked_text = ''.join(masked_pieces)
-
-    def repl(m: re.Match) -> str:
-        inner = m.group(1)
+    from markdown_resources import protected_ranges
+    ranges = protected_ranges(text)
+    math = scan_math(text)[0]
+    protected = [False] * len(text)
+    for start, stop in ranges:
+        protected[start:stop] = [True] * (stop - start)
+    # Mask formula internals so citation brackets inside math remain untouched,
+    # while an explanatory bracket around the complete formula can be changed.
+    chars = list(text)
+    for span in math:
+        chars[span.start():span.end()] = 'M' * (span.end() - span.start())
+    masked = ''.join(chars)
+    result = list(text)
+    for match in re.finditer(r'\[([^\[\]\n]+)\]', masked):
+        start, stop = match.span()
+        if protected[start] or escaped(text, start):
+            continue
+        inner = text[start + 1:stop - 1]
         if re.fullmatch(r'[\d\s,–—\-]+', inner) or inner.startswith('^'):
-            return m.group(0)
-        if '\x00MATH' in inner or re.search(r'[\u4e00-\u9fff]', inner):
-            return f'［{inner}］'
-        return m.group(0)
-
-    masked_text = re.sub(r'(?<!\!)\[([^[\]\n]+)\](?!\(|\[|:)', repl, masked_text)
-
-    for ph, orig in math_map.items():
-        masked_text = masked_text.replace(ph, orig)
-    return masked_text
+            continue
+        contains_math = any(start < span.start() and span.end() < stop for span in math)
+        if contains_math or re.search(r'[一-鿿]', inner):
+            result[start], result[stop - 1] = '［', '］'
+    return ''.join(result)
 
 
 def math_issues(body: str) -> list[str]:
@@ -539,7 +510,7 @@ def math_issues(body: str) -> list[str]:
         structural.append(body[pos])
         pos += 1
     source = ''.join(structural)
-    tags = list(re.finditer(r'(?<!\\)\\tag\b\*?', source))
+    tags = [m for m in re.finditer(r'\\tag\b\*?', source) if not escaped(source, m.start())]
     if len(tags) > 1:
         issues.append('Multiple tags; Agent must review source (no numbering guessed)')
     for tag in tags:
@@ -599,7 +570,8 @@ def main() -> None:
     failed = False
     for name in args.files:
         path = Path(name)
-        original = path.read_text(encoding='utf-8')
+        from portable_paths import read_text
+        original = read_text(path)
         if args.mode == 'check':
             issues = paren_issues(original)
             failed |= bool(issues)
@@ -608,7 +580,7 @@ def main() -> None:
                 print(f'  {item}')
         else:
             fixed = process(original)
-            sys.stdout.write(fixed if len(args.files) == 1 else f'<!-- {path.name} -->\n{fixed}')
+            print(fixed if len(args.files) == 1 else f'<!-- {path.name} -->\n{fixed}', end='')
     if failed:
         raise SystemExit(1)
 

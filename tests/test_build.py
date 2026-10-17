@@ -787,5 +787,97 @@ class BuildTests(unittest.TestCase):
         self.assertNotIn(orphan_rel, new_data['files'])
 
 
+    def test_auto_repairs_cli_applies_string_snapshot_notes_and_rebuilds(self):
+        self.book(total=1, pdf=True)
+        self.part('part01', [
+            block('image', bbox=[100, 200, 400, 600], image_caption='Fig. S1. (a)', image_footnote='First note'),
+            block('image', bbox=[450, 200, 800, 600], image_caption='(b)', image_footnote=['Second note']),
+        ])
+        self.cli('--auto-repairs', book=True)
+        text = self.text()
+        self.assertEqual(len(self.refs(text)), 1)
+        self.assertIn('First note', text)
+        self.assertIn('Second note', text)
+        self.assertIn('## Figure S1', text)
+        self.assertEqual(len(json.loads(self.text('build-report.json'))['repairs']), 2)
+        before = self.snapshot()
+        self.cli('--auto-repairs', book=True)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_native_pdf_only_exact_standalone_region(self):
+        store = build.FigureStore(self.base)
+        with fitz.open() as doc:
+            page = doc.new_page(width=200, height=100)
+            page.insert_image(fitz.Rect(20, 20, 140, 80), stream=png('blue'), keep_proportion=False)
+            self.assertIsNotNone(store.native_pdf_image(page, (.1, .2, .7, .8)))
+            self.assertIsNone(store.native_pdf_image(page, (.1, .2, .8, .8)))
+            self.assertIsNone(store.native_pdf_image(page, (.2, .3, .6, .7)))
+            page.draw_line((20, 30), (130, 70))
+            self.assertIsNone(store.native_pdf_image(page, (.1, .2, .7, .8)))
+
+    def test_pptx_cropped_rotated_picture_uses_pdf(self):
+        from pptx import Presentation
+        from pptx.util import Inches
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        pic = slide.shapes.add_picture(io.BytesIO(png('green')), Inches(1), Inches(1), Inches(4), Inches(3))
+        pic.crop_left = .2
+        pic.rotation = 30
+        source = self.base / 'source.pptx'
+        prs.save(source)
+        pages = build.load_source(source)
+        self.assertEqual(pages[0]['pictures'], [])
+        self.assertEqual(len(pages[0]['unsafe_pictures']), 1)
+        self.book(total=1, pdf=True)
+        _, stats = build.build_chapter([block('image')], pages, self.base / 'source.pdf',
+                                       self.base / 'render/images/ch', 'Title', [], mode='book')
+        self.assertEqual(stats['cropped_figures'], 1)
+        self.assertEqual(stats.get('native_figures', 0), 0)
+        with self.assertRaisesRegex(ValueError, 'requires a successful PDF crop'):
+            build.build_chapter([block('image')], pages, None, self.base / 'unsafe/images/ch',
+                                'Title', [], mode='book')
+
+    def test_grouped_picture_is_not_extracted_as_raw_blob(self):
+        from pptx import Presentation
+        from pptx.util import Inches
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        group = slide.shapes.add_group_shape()
+        group.shapes.add_picture(io.BytesIO(png('green')), Inches(1), Inches(1), Inches(4), Inches(3))
+        source = self.base / 'grouped.pptx'
+        prs.save(source)
+        page = build.load_source(source)[0]
+        self.assertEqual(page['pictures'], [])
+        self.assertEqual(len(page['unsafe_pictures']), 1)
+
+    def test_cross_page_tables_preserved_with_reported_range(self):
+        review = []
+        items = [block('table', page=i, table_caption='Table S1. Values',
+                       table_body=f'<table><tr><td>row{i}</td></tr></table>') for i in (0, 1)]
+        text, stats = build.build_chapter(items, None, None, self.base / 'tables/images/ch',
+                                         'Title', review, mode='book')
+        self.assertEqual(stats['tables'], 2)
+        self.assertIn('row0', text)
+        self.assertIn('row1', text)
+        self.assertEqual(review[0]['page_range'], [1, 2])
+
+    def test_prune_preserves_wiki_html_reference_and_encoded_assets(self):
+        self.out.mkdir()
+        image = self.out / 'images/ch1/a space.png'
+        image.parent.mkdir(parents=True)
+        image.write_bytes(png('red'))
+        state = self.base / 'state'
+        state.mkdir()
+        ledger = state / OWNERSHIP
+        for reference in ('![[a space.png]]', '<img src="images/ch1/a%20space.png">',
+                          '![x][asset]\n\n[asset]: images/ch1/a%20space.png',
+                          '[download](images/ch1/a%20space.png)', '![[missing.png]]'):
+            (self.out / 'manual.md').write_text(reference, encoding='utf-8')
+            ledger.write_text(json.dumps({'version': 1, 'files': {'images/ch1/a space.png': build.digest(image.read_bytes())}}), encoding='utf-8')
+            with self.subTest(reference=reference):
+                self.assertEqual(build._prune_orphan_images(self.out, state), 0)
+                self.assertTrue(image.is_file())
+
+
 if __name__ == '__main__':
     unittest.main()

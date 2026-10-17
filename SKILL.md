@@ -1,6 +1,6 @@
 ---
 name: doc-ocr-to-markdown
-description: 将扫描教材、专著图书、理工科课件、顶刊双栏论文、Supporting Information（SI补充材料）和学位论文转化为保留高清图表与LaTeX公式的Markdown知识库。用于文档OCR、教材分章节转md、课件PPT转笔记、Zotero文献导出与双向全量同步（元数据校正回写、读书笔记推送、PDF批注拉取、附件状态审计）、多面板碎图高置信度原地自动缝合与3x高清重裁、主文与SI跨文档双向链接绑定（[[主文-SI#Figure S1]]）、学术规范命名（第一作者-年份-标题）、文献元数据frontmatter，以及公式全量KaTeX编译与浏览器沙盒渲染终验。
+description: 将扫描教材、专著图书、理工科课件、顶刊双栏论文、Supporting Information（SI补充材料）和学位论文转化为保留高清图表与LaTeX公式的Markdown知识库。当用户要求把 PDF/PPTX/扫描件转成 Markdown、教材分章节整理、课件转笔记、论文或学位论文入 Obsidian 知识库、导出或同步 Zotero 文献与批注、修复多面板碎图与跨页图表、建立主文与 SI 双链、执行公式全量 KaTeX 校验时使用。支持只读 API + MCP 写入的 Zotero 同步、学术规范命名（第一作者-年份-标题）、元数据 frontmatter、图表 3 倍高清重裁与浏览器沙盒渲染终验。
 ---
 
 # 文档转 Markdown 知识库 (doc-ocr-to-markdown)
@@ -34,7 +34,7 @@ description: 将扫描教材、专著图书、理工科课件、顶刊双栏论�
 
 ### 步骤 1：智能切分与 OCR 识别
 
-超长教材（>200 页或 >100 MB）需先切片，避免触发 MinerU 云端单文件限制：
+超长教材（建议 >200 页或 >100 MB）先切片。提交入口会强制预检：PDF 有效性、加密、页数 >600、体积 >200 MB、单批 >200 份均拒绝；分片同时受页数与体积约束：
 
 ```bash
 # 1. 超长 PDF 自动切片（以 96 页为例）并生成 manifest.json 与 ids.tsv
@@ -65,8 +65,9 @@ OCR 会出现形近字、同音字或英文字母误识（如“轫致辐射”�
 - **去重**：按 SHA-256 / SHA-1 内容哈希去重，杜绝挂图讲解产生的重复资产。
 - **图内标签过滤**：文字块完全落在图片区域内（重叠度 > 0.6）且小于 12 字符的标签，丢弃不重复为正文。
 - **多面板碎图自动缝合与 S 编号独立隔离**：
-  - **全自动高置信度缝合**：装配引擎原生支持 `--auto-repairs`（单篇论文流程默认开启），自动识别同页带有 `(a)/(b)` 子面板标签或同图号碎图，原地计算外接矩形（union bbox）并以 $\ge 3\times$ 超高分辨率从原 PDF 重新裁切出完整大图；
-  - **S 编号独立隔离**：自动识别 `Figure S1`、`Fig. S1`、`Table S1`、`Scheme S1` 与 `附图 S1`，统一纳入 `supplemental:` 独立命名空间，杜绝与正文 `Figure 1` 发生串号或错误聚类；
+  - **高置信度自动缝合**：`--auto-repairs`（单篇论文流程默认开启）只合并同页、同图号或明确 `(a)/(b)` 面板、空间相邻且中间无正文的碎图；必须同时提供原 PDF 与 manifest。跨栏、远距离、无题注或缺面板证据的候选只导出人工草稿，不自动合并；
+  - **原图优先**：PDF 中可独立复原且未旋转、裁剪或与其他对象重叠的单张位图直接取原图，其余按完整区域至少 3 倍页面渲染裁切；PPTX 图片带裁剪、旋转、翻转或位于组合内时回退为 PDF 裁切，避免把幻灯片上隐藏的区域恢复出来；
+  - **S 编号独立隔离**：自动识别 `Figure S1`、`Fig. S1`、`Table S1`、`Scheme S1`、`Supplemental/Supplementary Figure 1`、`Supplementary Note 1` 与 `附图 S1`，统一纳入 `supplemental:` 独立命名空间，杜绝与正文 `Figure 1` 发生串号或错误聚类；
   - **人工审核与兜底审计**：使用 `python scripts/audit_figures.py <raw目录> [--manifest manifest.json] --out-repairs repairs-draft.json` 导出草稿；经原页核验后可通过 `--repairs` 显式覆盖。
 
 ### 步骤 4：科学公式严谨归一化
@@ -76,7 +77,7 @@ OCR 会出现形近字、同音字或英文字母误识（如“轫致辐射”�
 - 数学不等号转义：公式中的 `<` 和 `>` 自动转义为 `\lt ` 与 `\gt `，`<<` 和 `>>` 转义为 `\ll ` 与 `\gg `，表格内公式预先实体化转义，杜绝 BeautifulSoup / CommonMark / Obsidian 引擎将其误识别为 HTML 标签而破坏定界符与表格列；
 - 保留文本分组语义；有歧义的嵌套分组和标点回源确认后再修；
 - 修复粘连命令：`\vert` 与变量字母粘连（如 `\vertz` → `\vert z`、`\vertj` → `\vert j`、`\vertHg` → `\vert Hg`），`\cdotkg` → `\cdot kg`；
-- 化学配离子与物态消歧：涉及 `[Fe(CN)6](aq)` 等配合物物态时，正文中统一放入 `$\mathrm{...}$` 环境，避免 CommonMark 将 `[配合物](aq)` 误贪婪匹配为超链接；校验器内置化学常见物态（`aq`, `s`, `l`, `g`, `sln`, `cr`）保护规则；
+- 化学配离子与物态消歧：涉及 `[Fe(CN)6](aq)` 等配合物物态时，正文中统一放入 `$\mathrm{...}$` 环境，避免 CommonMark 将 `[配合物](aq)` 误贪婪匹配为超链接；校验器把 `(aq)` 一类伪链接判为错误而不是豁免，故意报错迫使回源修正，不替用户猜测化学物态；
 - 标题公式保全：标题中的化学分子式与数学符号必须完整保留行内公式语法（如 `$\mathrm{CO}_2$`）；纯文本降级时必须转为 Unicode 下标（如 `CO₂`），严禁保留破坏性的裸下划线伪代码；
 - 解释性方括号排版防劫持：正文中非超链接、非图片、非数字引用编号的解释性方括号，若内部包含公式 `$..$` 或中文说明，一律规范化为中文全角方括号 `［...］`，避免 Obsidian 将其误判为快捷链接导致公式无法渲染且源码着色为蓝；
 - 参考文献原生段落支持：`ref_text` 由解析器原生转换为正文段落，不再依赖外挂的 `set_type: body_text` 修复规则；
@@ -106,8 +107,8 @@ python scripts/build_research_document.py --pdf <论文PDF> --raw <OCR目录> \
 
 - **架构分流原则**：
   - **专著教材与复习讲义**：保持原有多章节划分（`01-第一章.md`、`02-第二章.md`、`00-目录.md`），采用几何自然流混排（垂直量化阶梯 $\Delta y = 25$），杜绝插图误置顶与跨页断句破裂。
-  - **科研学术文献**：彻底废除 `原文.md`，统一默认采用学术标准命名 `{{firstCreator}} - {{year}} - {{title}}.md`；独立 PDF 与 Word 衍生文件自动提炼作者、年份与清洗标题；单篇输出主笔记、`00-目录.md`（URI 编码安全跳转）与 `images/`。
-  - **补充材料 (SI) 跨文档双向网络**：传入 `--si-doc` 自动将正文中的 `Figure S1`、`Table S1` 等引用解析为 Obsidian 带锚点双链（`[[SI文档#Figure S1|Figure S1]]`），并在文末生成补充材料导读；传入 `--supplement-to` 时自动在 SI 文档顶部注入导读卡片，并在 frontmatter 中建立 `has_supplement` / `supplement_to` 互联映射。
+  - **科研学术文献**：统一默认采用学术标准命名 `{{firstCreator}} - {{year}} - {{title}}.md`；独立 PDF 与 Word 衍生文件只从标题、DOI、首页与文件属性等可核对证据提炼字段，不把 PDF 创建时间或 Office 用户名当出版信息；单篇输出主笔记、`00-目录.md`（URI 编码安全跳转）与 `images/`。
+  - **补充材料 (SI) 跨文档双向网络**：传入 `--si-doc` 自动将 `Figure S1`、`Fig. S1`、`Table S1`、`Scheme S1`、`Supplemental/Supplementary Figure 1`、`Supplementary Note 1` 等引用解析为双链：图表指向 SI 中实际生成的 `## Figure S1` 等标题；`Note` 只链接整篇 SI（构建器不生成 Note 标题，避免死锚点）；现有链接、行内代码、围栏代码自动跳过。传入 `--supplement-to` 在 SI 顶部注入回链卡片，并在 frontmatter 建立 `has_supplement` / `supplement_to`。
 - **段落边界**：保守保留 OCR 段落与跨页边界，避免误拼题目、公式及新段落。
 - **标题与习题精准消歧**：区分名词性小节编号（如 `1. 晶胞概念` 归入 H3）与指令性习题题干（如 `1. 计算这个数`、以 `。？！` 结句或位于习题区者保留为列表/正文），层级结构严谨；拆分章名与传入标题一致时去重；实质脚注和整页图保留，不按 OCR 标签或面积静默丢弃。
 - **干净交付**：默认只生成导航、正文 Markdown 和图片；构建状态位于输出旁的 `.<目录名>.build/`，可用 `--state-dir` 指定外部工作目录。
@@ -123,14 +124,14 @@ python scripts/build_research_document.py --pdf <论文PDF> --raw <OCR目录> \
 
 ```bash
 # 1. 结构与资源链接完整性检查
-python scripts/validate_output.py ./知识库 --images-dir images
+python scripts/validate_output.py ./知识库 --images-dir images [--resource-root <父目录>]
 
 # 2. 抽取全部公式并执行本地 KaTeX 全量编译（要求 0 失败）
 python scripts/extract_formulas.py ./知识库 --out formulas.json
 node scripts/validate_math.cjs formulas.json
 ```
 
-检查围栏未闭合错误与图片遮蔽警告；合法图片语法示例须标注代码语言（如 `markdown`）。校验器会自动遮蔽公式区域，避免将化学式等配位方括号误报为链接失效。源图片候选数、解析图片数与有效引用数含义不同，不能直接要求相等。未引用资产会列出路径，默认保留；重建可用新目录核验，不清空已有知识库。
+跨目录 SI 双链必须传 `--resource-root`（主文与 SI 的共同父目录），否则目标缺失会直接报错而不是放宽。检查围栏未闭合错误与图片遮蔽警告；合法图片语法示例须标注代码语言（如 `markdown`）。校验器会自动遮蔽公式区域，避免将化学式等配位方括号误报为链接失效。源图片候选数、解析图片数与有效引用数含义不同，不能直接要求相等。未引用资产会列出路径，默认保留；重建可用新目录核验，不清空已有知识库。
 
 ### 步骤 7：浏览器实际渲染沙箱验收
 
@@ -143,23 +144,32 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 - **客户端真实渲染终验**：**“公式语法编译通过 ≠ 客户端显示正常”**。本地沙箱通过后，最终交付必须在实际宿主客户端（如 Obsidian）中核验阅读与实时预览视图，确保没有被 Markdown 语法劫持的伪链接或裸公式。
 - **Obsidian 客户端兼容提示**：在瞬间批量写入数百张新插图时，Obsidian 后台文件监视器（File Watcher）可能存在索引延迟，偶见“找不到图片”占位提示。重启 Obsidian 即可触发全库索引扫描并正常渲染。
 
-### 步骤 8：Zotero 双向全量同步（学术闭环）
+### 步骤 8：Zotero 同步（只读 API + MCP 写入）
 
-知识库与 Zotero 本地客户端之间实现双向数据流闭环：
+Zotero 本地 HTTP API 在本技能中**只读**；所有写入经 Zotero 官方 MCP 工具执行，并回读确认：
 
 ```bash
-# 1. 元数据与附件对比（默认安全只读预览，杜绝静默破坏）
-python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 论文标题/第一作者 等 - 年份 - 论文标题.md"
+# 1. 只读对比（默认不写任何文件）
+python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 标题/第一作者 等 - 年份 - 标题.md"
 
-# 2. 确认差异并回写元数据 + 将 Markdown 阅读笔记推送为 Zotero 子笔记
-python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 论文标题/第一作者 等 - 年份 - 论文标题.md" \
-    --apply --report zotero-sync-report.json
+# 2. 首次同步：显式选择以哪一方为准，生成 MCP 操作计划
+python scripts/zotero_sync.py "文献.md" --apply --initial-direction remote \
+    --report zotero-sync-report.json
 
-# 3. 双向拉取 Zotero PDF 中的划线高亮与批注至 Markdown 文档末尾
-python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 论文标题/第一作者 等 - 年份 - 论文标题.md" \
-    --pull-annotations --apply
+# 3. 用 MCP 执行 report 中的 operations（update_item / add_note），
+#    再跑同一命令回读；退出码 0 且状态 verified_remote_write 才算完成
+python scripts/zotero_sync.py "文献.md" --apply --initial-direction remote \
+    --report zotero-sync-report.json
+
+# 4. 拉取 PDF 批注（按 annotation key 增量更新受管区域）
+python scripts/zotero_sync.py "文献.md" --apply --pull-annotations \
+    --report zotero-sync-report.json
 ```
-- 详见 `references/zotero-sync.md`，支持通过 Zotero 官方 MCP 工具（`update_item`, `add_note`, `attach_pdf`, `save_highlights`）协同操作。
+
+- 退出码：`0` 已一致/回读通过，`1` 冲突或失败，`2` 有待执行的 MCP 操作。
+- 三方基线与 pending 保存在文档旁的 `.文档名.zotero-sync.json`；首次未指定方向会报 `initial_direction_required`。
+- 群组库必须同时匹配 frontmatter URI 与 `--base-url /api/groups/<id>`；个人库与群组库不会互相误路由。
+- 只更新带稳定 `KB-SYNC:` 标识的受管笔记和 `zotero-sync:annotations` 受管区域，用户自建笔记与正文不受影响。字段映射与限制见 `references/zotero-sync.md`。
 
 ---
 
@@ -168,11 +178,11 @@ python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 论
 | 操作维度 | 控制级别 | 规范边界 |
 | :--- | :--- | :--- |
 | **归一化与语法** | **严格收紧 (Zero Tolerance)** | 坐标转换公式、KaTeX 编译通过率必须 **100%**；严禁出现未闭合定界符、绝对路径或损坏图片链接。 |
-| **Zotero 数据回写** | **严格收紧 (Zero Tolerance)** | 默认只读 `--dry-run` 审查；必须显式传入 `--apply` 并提供审计日志，杜绝未授权静默篡改用户文献库。 |
+| **Zotero 数据回写** | **严格收紧 (Zero Tolerance)** | HTTP 层只读；写入必须经 MCP 工具，且每条操作核对库身份、版本与前置值后回读验证。冲突不自动合并，空值不清空远端。 |
 | **文献命名规范** | **严格收紧** | 学术论文默认统一采用 `{{firstCreator}} - {{year}} - {{title}}.md` 标准命名；支持 `--file` 自定义覆盖；禁止使用无意义的 `原文.md`。 |
 | **补充材料跨篇双链** | **严格收紧** | 必须采用标准 Obsidian `[[文档#锚点|显示名]]` 语法；跳过代码块与已存在链接，建立 `has_supplement` / `supplement_to` 拓扑双链。 |
 | **文档组织分流** | **严格收紧** | 专著教材/复习讲义保持多章节（`01-第一章.md`）分流架构；学术论文保持单篇一体化架构（主笔记+`00-目录.md`+`images/`）。 |
-| **多面板碎图缝合** | **分级自适应 (Adaptive)** | 高置信度子面板（明确子标签/同图号无冲突）全自动原地重裁；跨栏冲突或疑似多图号异常保留人工复核草稿。 |
+| **多面板碎图缝合** | **分级自适应 (Adaptive)** | 仅同页、同图号或明确 (a)/(b) 面板、空间相邻且中间无正文时自动重裁；跨栏、远距离、缺题注或疑似多图号只保留人工草稿。 |
 | **文件完整性** | **严格收紧** | 必须包含 `00-目录.md` 导航入口（标准 URI 编码）；图片全量可解码；严禁破坏性清空输出目录。 |
 | **排版与段落合并** | **自适应灵活 (Moderate)** | 根据书籍逻辑组织章节、保守处理段落；子图合并与图题改挂须有原页依据，确认后的图块边界不再自动合并。 |
 | **复杂化学/特殊结构** | **工程务实 (Pragmatic)** | 遇到二维环状分子或复杂推导，若 LaTeX 表达失真，优先采用高保真原图局域裁切，确保科学真实性。 |
@@ -191,8 +201,8 @@ python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 论
 8. ❌ **盲信 OCR 块原始顺序**：忽略扫描排版与 OCR 提取序列的不一致，长篇教材必须由几何自然流混排，严禁将底部插图置于页首。
 9. ❌ **标题公式剥离为裸下划线**：将标题中的 `$\mathrm{CO}_2$` 粗暴降级为 `CO_2`，不仅语法失真，还容易与同行的其他下划线产生 Markdown 斜体冲突。
 10. ❌ **把编译无错等同于客户端渲染完成**：在离线沙盒里仅验证 KaTeX 无报错，未校验真实 Markdown 宿主解析器（如 Obsidian）对外层方括号的语法劫持与链接冲突。
-11. ❌ **忽略跨平台路径长限制 (Windows MAX_PATH)**：在输出长题名学术文献时未对文件读写使用安全路径前缀（`\\?\`），导致路径达到 260 字符上限时报 `[WinError 3]` 写入崩溃。
-12. ❌ **静默覆写 Zotero 本地数据库**：未经 diff 确认和用户授权，自动化脚本静默篡改 Zotero 本地元数据或覆盖用户已有笔记。
+11. ❌ **忽略跨平台路径长限制 (Windows MAX_PATH)**：只给最终写入加 `\\?\`，却用普通 `rglob` 枚举，导致超长路径文档根本没有被读取或校验。枚举、读取、写入、原子替换必须走同一套安全路径，目录访问错误不能被静默吞掉。
+12. ❌ **静默覆写 Zotero 本地数据库**：绕过版本/前置值校验直接 PATCH；或把本地 API 当可写接口，未回读就宣称同步成功。写入必须经 MCP 工具并回读验证。
 13. ❌ **孤立割裂主文与补充材料 (SI)**：将 SI 与主文作为两篇互不相干的文档孤立存放，未提取 S 编号与跨文档双链，导致学术上下文割裂。
 
 ---
@@ -200,8 +210,7 @@ python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 论
 ## 5. 参考文档与工具链
 
 - `references/research-documents.md` — 学术文献（期刊/学位论文/预印本/独立PDF）标准命名、元数据frontmatter、双栏阅读流与验收规范
-- `references/zotero-sync.md` — Zotero 双向全量同步（元数据回写、笔记推送、批注拉取、附件审计）规范与 MCP 工具联动指南
-- `references/book-workflow.md` — 500+ 页学术专著与教材的切片、全局映射与分章节重组指南
+- `references/zotero-sync.md` — Zotero 同步（只读 API、三方基线、MCP 操作计划与回读、批注增量、附件审计）规范
 - `references/book-workflow.md` — 500+ 页学术专著与教材的切片、全局映射与分章节重组指南
 - `references/math-normalization.md` — 14 条科学公式归一化规则与真实例子
 - `references/mineru-api.md` — MinerU 官方契约、数据结构、归一化坐标与 DoH 连接策略

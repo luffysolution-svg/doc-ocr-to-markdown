@@ -329,5 +329,81 @@ class ZoteroExportTests(unittest.TestCase):
         self.assertEqual(list(outside.iterdir()), [])
 
 
+class ExportRefreshTests(unittest.TestCase):
+    def test_explicit_library_routes_retained_and_identity_mismatch_rejected(self):
+        for route in ('/api/users/123', '/api/groups/42'):
+            url = 'http://127.0.0.1:23119' + route
+            self.assertEqual(export.validate_base_url(url), url)
+        api = export.LocalAPI('http://127.0.0.1:23119/api/groups/42')
+        with self.assertRaisesRegex(ValueError, 'type mismatch'):
+            export.library_identity(api, paper('PAPER001'))
+        item = paper('PAPER001')
+        item['library'] = {'type': 'group', 'id': 43}
+        with self.assertRaisesRegex(ValueError, 'ID mismatch'):
+            export.library_identity(api, item)
+        item['library']['id'] = 42
+        self.assertEqual(export.library_identity(api, item), {'type': 'group', 'id': 42})
+
+    def test_refresh_managed_manifest_and_preserve_manual_edits(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / 'export'
+            item = paper('PAPER001')
+            with api_fixture([item]) as (base, _):
+                export.export_library(out, base)
+                item['data']['title'] = 'Updated remote title'
+                with self.assertRaises(ValueError):
+                    export.export_library(out, base)
+                refreshed = export.export_library(out, base, refresh=True)
+                self.assertEqual(refreshed[0]['title'], 'Updated remote title')
+                self.assertEqual(json.loads((out / 'library.json').read_text(encoding='utf-8'))[0]['title'], 'Updated remote title')
+                (out / 'ids.tsv').write_text('Human edited\n', encoding='utf-8')
+                before = (out / 'library.json').read_bytes()
+                with self.assertRaisesRegex(ValueError, 'refusing overwrite'):
+                    export.export_library(out, base, refresh=True)
+                self.assertEqual((out / 'library.json').read_bytes(), before)
+                self.assertEqual((out / 'ids.tsv').read_text(), 'Human edited\n')
+
+    def test_children_and_annotations_paginate_without_following_next_link(self):
+        import zotero_sync
+        children = [attachment('ATTACH01'), attachment('ATTACH02')]
+        annotations = [{'key': f'ANNOT00{i}', 'data': {'key': f'ANNOT00{i}', 'itemType': 'annotation'}} for i in range(1, 4)]
+        with api_fixture([], {'PAPER001': children, 'ATTACH01': annotations}, page_size=1) as (base, calls):
+            client = zotero_sync.ZoteroSyncClient(base)
+            self.assertEqual(len(client.get_children('PAPER001')), 2)
+            self.assertEqual(len(client.get_children('ATTACH01')), 3)
+        self.assertEqual(len(calls), 5)
+        self.assertTrue(all(c[0] == 'GET' for c in calls))
+
+    def test_failure_json_and_repeating_pagination_rejected(self):
+        from io import BytesIO
+        class Response(BytesIO):
+            headers = {'Total-Results': '200'}
+        api = export.LocalAPI()
+        with patch.object(api, 'get', return_value=Response(json.dumps({'failed': {'0': 'bad'}}).encode())):
+            with self.assertRaisesRegex(ValueError, 'item list'):
+                list(api.items('/items/top'))
+        with patch.object(api, 'get', side_effect=lambda *args: Response(json.dumps([paper('PAPER001')]).encode())):
+            with self.assertRaisesRegex(ValueError, 'Repeated item'):
+                list(api.items('/items/top'))
+
+    def test_owned_report_tampering_and_atomic_replace_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'report.json'
+            export.write_owned(path, {'value': 1}, 'owner')
+            original = path.read_bytes()
+            with patch.object(export.os, 'replace', side_effect=OSError('publish failed')):
+                with self.assertRaises(OSError):
+                    export.write_owned(path, {'value': 2}, 'owner')
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(export.read_owned(path, 'owner'), {'value': 1})
+            with self.assertRaisesRegex(ValueError, 'Unowned'):
+                export.read_owned(path, 'someone else')
+            data = json.loads(path.read_text())
+            data['payload']['value'] = 'human edit'
+            path.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, 'manually edited'):
+                export.write_owned(path, {'value': 2}, 'owner')
+
+
 if __name__ == '__main__':
     unittest.main()

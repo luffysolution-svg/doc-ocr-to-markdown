@@ -65,16 +65,18 @@ class AuditFiguresTests(unittest.TestCase):
             ('Fig. 1. A wrapped reference to\nFig. 2 is in the body.', ['1']),
             ('See Figure 1 for details.', []),
             ('As in Extended Data Fig. 1, points overlap.', []),
-            ('Supplementary Figure 1. Supplementary plot', []),
+            ('Supplementary Figure 1. Supplementary plot', ['supplemental:S1']),
             ('(b) compare Fig. 2.', []),
         ]:
             with self.subTest(caption=caption):
                 self.assertEqual(extract_figure_numbers([caption]), expected)
 
     def test_chinese_numbering_and_multiple_caption_entries_preserved(self):
+        # 只解析题注开头的编号；正文中的“见图 2.5”是交叉引用，与英文
+        # "see Fig. 2" 同等处理，不能当作第二个图号参与聚类。
         self.assertEqual(extract_figure_numbers([
             '图 2-4 晶胞结构，见图 2．5', '图2.4 重复',
-        ]), ['2.4', '2.5'])
+        ]), ['2.4'])
         self.assertEqual(extract_figure_numbers([
             'Figure 1. First plot; see Fig. 9.', 'Fig. 2. Second plot',
         ]), ['1', '2'])
