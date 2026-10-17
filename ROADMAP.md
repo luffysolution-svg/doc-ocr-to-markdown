@@ -264,6 +264,9 @@ zotero_item_uri: "zotero://select/library/items/XXXXXXXX"
 | 路线图与需求边界 | 已完成 | 本文和科研参考说明 |
 | 元数据与输入输出约定 | 已实施 | YAML、完整作者/原文摘要、字段来源和外部构建状态 |
 | 单篇期刊 PDF 流程 | 已实测 | 6 篇英文双栏原生 PDF，71 页；独立来源清单与逐项修复 |
+| 多面板碎图自动缝合 | 已实测 | `audit_figures.py` 置信度判定 + `build_markdown.py --auto-repairs` 原地高分辨率 3x 重裁 |
+| Supporting Information 跨文档双链 | 已实测 | `Figure S*` 独立命名空间隔离，自动转换正文 Obsidian 双向链接与导读卡片 |
+| Zotero 双向全量同步 | 已实测 | `zotero_sync.py` 实现元数据 diff 回写、阅读笔记推送、PDF 批注拉取与默认 dry-run 保护门禁 |
 | Zotero 来源与批处理 | 用户库已实测 | 6 个不同 PDF、1 个字节重复别名、2 个缺附件；只读 API、哈希和失败隔离；群组库待测 |
 | 期刊论文稳定支持 | 当前样本通过 | 来源图表对账、KaTeX 与浏览器渲染；新类型仍需独立测试 |
 | 其他科研类型 | 待样本 | 每类真实文件独立验证 |

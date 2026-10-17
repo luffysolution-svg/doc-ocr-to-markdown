@@ -488,6 +488,30 @@ class ResearchEntryTests(unittest.TestCase):
         self.assertTrue(expected.is_file(), f'Expected {expected} to exist')
         self.assertFalse((self.out / '原文.md').exists())
 
+    def test_supplemental_references_linking_and_banners(self):
+        sample_text = (
+            '# Results\n\n'
+            'As shown in Figure S1 and Fig. S2, band gap decreases.\n'
+            'Table S1 gives lattice parameters. 见图 S1.\n'
+            '```text\n'
+            'Figure S1 is untouched in code block\n'
+            '```\n'
+            'Already linked: [[Existing#Figure S1|Figure S1]].\n'
+        )
+        linked = metadata.link_supplemental_references(sample_text, 'Noh - 2019 - SI')
+        self.assertIn('[[Noh - 2019 - SI#Figure S1|Figure S1]]', linked)
+        self.assertIn('[[Noh - 2019 - SI#Fig. S2|Fig. S2]]', linked)
+        self.assertIn('[[Noh - 2019 - SI#Table S1|Table S1]]', linked)
+        self.assertIn('[[Noh - 2019 - SI#图 S1|图 S1]]', linked)
+        self.assertIn('Figure S1 is untouched in code block', linked)
+        self.assertIn('[[Existing#Figure S1|Figure S1]]', linked)
+
+        # Banner injection
+        si_text = '---\ntitle: "SI"\n---\n# Supplemental Information\nDetails here.\n'
+        bannered = metadata.inject_supplement_banner(si_text, 'Noh - 2019 - Main')
+        self.assertIn('> [!info] 关联主文', bannered)
+        self.assertIn('本文档为 [[Noh - 2019 - Main]] 的补充材料', bannered)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -13,9 +13,83 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 FIELDS = ('title', 'document_type', 'authors', 'date', 'publication_title', 'volume',
-          'issue', 'pages', 'doi', 'language', 'abstract', 'zotero_item_uri', 'url', 'keywords')
+          'issue', 'pages', 'doi', 'language', 'abstract', 'zotero_item_uri', 'url', 'keywords',
+          'has_supplement', 'supplement_to')
 EXCLUDED = {'zotero_item_key', 'zotero_pdf_uri'}
 DOI = re.compile(r'10\.\d{4,9}/[^\s<>"\u200b]+', re.I)
+
+
+def is_supplemental_filename(name: str) -> bool:
+    """Check if filename indicates a supplemental/supporting information file."""
+    stem = Path(name).stem.lower()
+    markers = ('-si', '_si', '.si', 'si.', 'supporting', 'supplement', 'appendix', 'mmc1')
+    return any(m in stem for m in markers)
+
+
+def detect_supplemental_pdf(main_pdf: Path, candidates: list[Path] | None = None) -> Path | None:
+    """Detect candidate supplemental PDF matching main paper."""
+    main_pdf = main_pdf.resolve()
+    pool = candidates if candidates is not None else list(main_pdf.parent.glob('*.pdf'))
+    main_stem = main_pdf.stem.lower()
+    for cand in pool:
+        cand_res = cand.resolve()
+        if cand_res == main_pdf:
+            continue
+        cand_stem = cand_res.stem.lower()
+        if is_supplemental_filename(cand_res.name):
+            # Check if stems share common base prefix or parent
+            if (cand_stem.startswith(main_stem) or main_stem.startswith(cand_stem)
+                    or len(set(cand_stem.split()) & set(main_stem.split())) >= 2):
+                return cand_res
+    return None
+
+
+def link_supplemental_references(text: str, si_doc_name: str) -> str:
+    """Transform in-text references to SI figures/tables into Obsidian wikilinks.
+
+    Converts occurrences like 'Figure S1', 'Fig. S2', 'Table S1', '附图 S1'
+    into '[[<si_doc_name>#Figure S1|Figure S1]]' without altering code blocks
+    or existing wikilinks.
+    """
+    en_pattern = re.compile(
+        r'(?<!\[\[)(?<!#)\b(?P<label>(?:Figure|Fig\.?|Table|Scheme)\s+S\d+(?:[.\-]\d+)*)\b(?!\]\])',
+        re.IGNORECASE
+    )
+    zh_pattern = re.compile(
+        r'(?<!\[\[)(?<!#)(?P<label>(?:附图\s*(?:S)?|图\s*S)\s*\d+(?:[.\-]\d+)*)(?!\]\])'
+    )
+
+    def repl(m):
+        raw = m.group('label').strip()
+        return f'[[{si_doc_name}#{raw}|{raw}]]'
+
+    lines = text.splitlines()
+    in_fence = False
+    result = []
+    for line in lines:
+        if line.strip().startswith('```') or line.strip().startswith('~~~'):
+            in_fence = not in_fence
+            result.append(line)
+            continue
+        if not in_fence:
+            line = en_pattern.sub(repl, line)
+            line = zh_pattern.sub(repl, line)
+        result.append(line)
+    return '\n'.join(result)
+
+
+def inject_supplement_banner(si_markdown_text: str, main_doc_name: str) -> str:
+    """Inject a callout banner linking back to main paper at top of SI markdown."""
+    banner = (
+        f'> [!info] 关联主文\n'
+        f'> 本文档为 [[{main_doc_name}]] 的补充材料（Supporting Information / SI）。\n\n'
+    )
+    if '---' in si_markdown_text:
+        parts = si_markdown_text.split('---', 2)
+        if len(parts) >= 3 and parts[0].strip() == '':
+            # Frontmatter exists
+            return f'---{parts[1]}---\n\n{banner}{parts[2].lstrip()}'
+    return banner + si_markdown_text
 
 
 def sha256_file(path: Path) -> str:

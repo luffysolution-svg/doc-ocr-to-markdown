@@ -818,6 +818,7 @@ def main() -> None:
     parser.add_argument('--pdf-dir', help='PDF 目录（源文件里没有的图从这里裁切）')
     parser.add_argument('--keep-table-images', action='store_true', help='为复杂数据表额外保留原扫描图高清裁片，实现文字检索与原版验算双轨保真')
     parser.add_argument('--repairs', help='回看原页后确认的修复清单 JSON；旧值或定位不符则停止')
+    parser.add_argument('--auto-repairs', action='store_true', help='未提供 --repairs 时自动推导并应用高置信度多面板图块缝合')
     parser.add_argument('--agent-index', action='store_true', help='显式生成 Agent/RAG 分块、页码映射与检索清单')
     parser.add_argument('--state-dir', help='外部构建状态目录，默认是输出目录旁的 .<目录名>.build')
     parser.add_argument('--source-dir', help='源文件目录（用于文字校正与内嵌原图，如 PPTX）')
@@ -868,6 +869,12 @@ def main() -> None:
             from book_features import apply_repairs
             blocks, repairs_applied = apply_repairs(
                 blocks, json.loads(Path(args.repairs).read_text(encoding='utf-8')), pdf_path)
+        elif args.auto_repairs and pdf_path is not None:
+            from audit_figures import generate_confident_repairs_for_blocks
+            from book_features import apply_repairs
+            auto_reps = generate_confident_repairs_for_blocks(blocks)
+            if auto_reps:
+                blocks, repairs_applied = apply_repairs(blocks, auto_reps, pdf_path)
         identities = {sec['id'] for sec in sections}
         if only and not only <= identities:
             raise ValueError(f'--only 未知章节: {sorted(only - identities)}')

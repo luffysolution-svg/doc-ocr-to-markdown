@@ -110,6 +110,16 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
         raise ValueError('Source PDF must remain outside delivery directory')
     fields, provenance = collect_metadata(preflight, payload, crossref=args.crossref,
                                            cache_dir=contained(state, 'research/crossref-cache'))
+    si_doc = getattr(args, 'si_doc', None)
+    supplement_to = getattr(args, 'supplement_to', None)
+    if si_doc:
+        si_clean = re.sub(r'^(?:\[\[)?(.*?)(?:\]\])?$', r'\1', si_doc.strip())
+        fields['has_supplement'] = f'[[{si_clean}]]'
+        provenance['field_sources']['has_supplement'] = 'caller_supplied_supplemental_link'
+    if supplement_to:
+        main_clean = re.sub(r'^(?:\[\[)?(.*?)(?:\]\])?$', r'\1', supplement_to.strip())
+        fields['supplement_to'] = f'[[{main_clean}]]'
+        provenance['field_sources']['supplement_to'] = 'caller_supplied_main_paper_link'
     title = fields.get('title') or pdf.stem
     if 'title' not in fields:
         provenance['review'].append('Navigation/H1 uses source filename only; not asserted as publication title')
@@ -134,6 +144,7 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
                    'metadata': fields, 'identity': identity, 'reading_order': args.reading_order,
                    'file': target_file,
                    'repairs': sha256_file(Path(args.repairs)) if args.repairs else None,
+                   'auto_repairs': bool(getattr(args, 'auto_repairs', True)),
                    'code': {p.name: sha256_file(p) for p in sorted(SCRIPTS.glob('*.py'))},
                    'math_validator': sha256_file(SCRIPTS / 'validate_math.cjs'),
                    'keep_table_images': True}
@@ -159,12 +170,32 @@ def build(args: argparse.Namespace) -> tuple[int, dict]:
                    '--reading-order', args.reading_order, '--keep-table-images', '--state-dir', str(state)]
         if args.repairs:
             command.extend(['--repairs', str(Path(args.repairs).resolve())])
+        elif getattr(args, 'auto_repairs', True):
+            command.append('--auto-repairs')
         result = run_command(command)
         report['commands'].append(result)
         if result['returncode']:
             report['automatic_checks'] = 'build_failed'
             write_json(report_path, report)
             return 1, report
+        target_md_path = contained(out, target_file)
+        if target_md_path.is_file():
+            md_text = target_md_path.read_text(encoding='utf-8')
+            modified = False
+            if si_doc:
+                from research_metadata import link_supplemental_references
+                si_clean = re.sub(r'^(?:\[\[)?(.*?)(?:\]\])?$', r'\1', si_doc.strip())
+                md_text = link_supplemental_references(md_text, si_clean)
+                if '## 补充材料' not in md_text and '## Supporting Information' not in md_text:
+                    md_text = md_text.rstrip() + f'\n\n## 补充材料 (Supporting Information)\n- 详见本文补充材料与附图：[[{si_clean}]]\n'
+                modified = True
+            if supplement_to:
+                from research_metadata import inject_supplement_banner
+                main_clean = re.sub(r'^(?:\[\[)?(.*?)(?:\]\])?$', r'\1', supplement_to.strip())
+                md_text = inject_supplement_banner(md_text, main_clean)
+                modified = True
+            if modified:
+                target_md_path.write_text(md_text, encoding='utf-8', newline='\n')
     else:
         report['build'] = 'reused_unmodified_owned_output'
     # Run validators even on cache hit, capturing every exit code and output.
@@ -201,10 +232,14 @@ def main(argv: list[str] | None = None) -> int:
                         help='Naming style (default: zotero pattern; standard academic naming)')
     parser.add_argument('--state-dir', help='External state directory (default sibling .<out-name>.build)')
     parser.add_argument('--repairs', help='Source-verified repairs forwarded unchanged to core')
+    parser.add_argument('--auto-repairs', action=argparse.BooleanOptionalAction, default=True,
+                        help='Automatically stitch high-confidence multi-panel figures (default enabled)')
     parser.add_argument('--id', help='Stable document ID; required for ambiguous multi-item metadata/OCR roots')
     parser.add_argument('--reading-order', choices=['source', 'geometry'], default='source',
                         help='Default preserves OCR sequence within each physical page')
     parser.add_argument('--crossref', action='store_true', help='Opt in to DOI-only public lookup; strict title/DOI gate')
+    parser.add_argument('--si-doc', help='Link in-text Figure S* references to this supporting information document')
+    parser.add_argument('--supplement-to', help='If current PDF is SI, inject banner and metadata linking back to main paper')
     args = parser.parse_args(argv)
     try:
         code, report = build(args)

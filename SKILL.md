@@ -1,6 +1,6 @@
 ---
 name: doc-ocr-to-markdown
-description: 将扫描教材、PDF图书、理工科课件、期刊论文（含正文与补充材料SI）、学位论文和讲义整理为保留图表与LaTeX公式的Markdown知识库。用于文档OCR、教材分章节转md、课件PPT转笔记、Zotero文献与独立PDF/Word按学术标准规范命名整理（第一作者-年份-标题）、文献元数据frontmatter、Obsidian笔记，以及排查与修复图片缺失、子图拆散、多面板错切、图题错挂或裁图不全。支持MinerU云端OCR、回源校正、公式全量KaTeX编译与浏览器渲染验收。
+description: 将扫描教材、专著图书、理工科课件、顶刊双栏论文、Supporting Information（SI补充材料）和学位论文转化为保留高清图表与LaTeX公式的Markdown知识库。用于文档OCR、教材分章节转md、课件PPT转笔记、Zotero文献导出与双向全量同步（元数据校正回写、读书笔记推送、PDF批注拉取、附件状态审计）、多面板碎图高置信度原地自动缝合与3x高清重裁、主文与SI跨文档双向链接绑定（[[主文-SI#Figure S1]]）、学术规范命名（第一作者-年份-标题）、文献元数据frontmatter，以及公式全量KaTeX编译与浏览器沙盒渲染终验。
 ---
 
 # 文档转 Markdown 知识库 (doc-ocr-to-markdown)
@@ -64,7 +64,10 @@ OCR 会出现形近字、同音字或英文字母误识（如“轫致辐射”�
 
 - **去重**：按 SHA-256 / SHA-1 内容哈希去重，杜绝挂图讲解产生的重复资产。
 - **图内标签过滤**：文字块完全落在图片区域内（重叠度 > 0.6）且小于 12 字符的标签，丢弃不重复为正文。
-- **图块异常与多面板重组**：使用 `python scripts/audit_figures.py <raw目录> [--manifest manifest.json] --out-repairs repairs-draft.json` 自动探测同页多面板图块并计算外接矩形（union bbox），生成修复草稿；经原页目视核实后，通过 `--repairs` 传入完成高清重裁合并与碎块消除。
+- **多面板碎图自动缝合与 S 编号独立隔离**：
+  - **全自动高置信度缝合**：装配引擎原生支持 `--auto-repairs`（单篇论文流程默认开启），自动识别同页带有 `(a)/(b)` 子面板标签或同图号碎图，原地计算外接矩形（union bbox）并以 $\ge 3\times$ 超高分辨率从原 PDF 重新裁切出完整大图；
+  - **S 编号独立隔离**：自动识别 `Figure S1`、`Fig. S1`、`Table S1`、`Scheme S1` 与 `附图 S1`，统一纳入 `supplemental:` 独立命名空间，杜绝与正文 `Figure 1` 发生串号或错误聚类；
+  - **人工审核与兜底审计**：使用 `python scripts/audit_figures.py <raw目录> [--manifest manifest.json] --out-repairs repairs-draft.json` 导出草稿；经原页核验后可通过 `--repairs` 显式覆盖。
 
 ### 步骤 4：科学公式严谨归一化
 
@@ -97,12 +100,14 @@ python scripts/build_markdown.py --raw ./ocr-work/raw --out ./知识库 \
 # 3. 学术科研文献模式（期刊/学位论文/独立PDF，统一学术标准命名）：
 python scripts/build_research_document.py --pdf <论文PDF> --raw <OCR目录> \
     --out "./科研知识库/第一作者 等 - 年份 - 论文标题" \
-    --metadata ./library.json --id 条目key
+    --metadata ./library.json --id 条目key \
+    --si-doc "第一作者 等 - 年份 - 论文标题 - SI"
 ```
 
 - **架构分流原则**：
   - **专著教材与复习讲义**：保持原有多章节划分（`01-第一章.md`、`02-第二章.md`、`00-目录.md`），采用几何自然流混排（垂直量化阶梯 $\Delta y = 25$），杜绝插图误置顶与跨页断句破裂。
   - **科研学术文献**：彻底废除 `原文.md`，统一默认采用学术标准命名 `{{firstCreator}} - {{year}} - {{title}}.md`；独立 PDF 与 Word 衍生文件自动提炼作者、年份与清洗标题；单篇输出主笔记、`00-目录.md`（URI 编码安全跳转）与 `images/`。
+  - **补充材料 (SI) 跨文档双向网络**：传入 `--si-doc` 自动将正文中的 `Figure S1`、`Table S1` 等引用解析为 Obsidian 带锚点双链（`[[SI文档#Figure S1|Figure S1]]`），并在文末生成补充材料导读；传入 `--supplement-to` 时自动在 SI 文档顶部注入导读卡片，并在 frontmatter 中建立 `has_supplement` / `supplement_to` 互联映射。
 - **段落边界**：保守保留 OCR 段落与跨页边界，避免误拼题目、公式及新段落。
 - **标题与习题精准消歧**：区分名词性小节编号（如 `1. 晶胞概念` 归入 H3）与指令性习题题干（如 `1. 计算这个数`、以 `。？！` 结句或位于习题区者保留为列表/正文），层级结构严谨；拆分章名与传入标题一致时去重；实质脚注和整页图保留，不按 OCR 标签或面积静默丢弃。
 - **干净交付**：默认只生成导航、正文 Markdown 和图片；构建状态位于输出旁的 `.<目录名>.build/`，可用 `--state-dir` 指定外部工作目录。
@@ -138,6 +143,24 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 - **客户端真实渲染终验**：**“公式语法编译通过 ≠ 客户端显示正常”**。本地沙箱通过后，最终交付必须在实际宿主客户端（如 Obsidian）中核验阅读与实时预览视图，确保没有被 Markdown 语法劫持的伪链接或裸公式。
 - **Obsidian 客户端兼容提示**：在瞬间批量写入数百张新插图时，Obsidian 后台文件监视器（File Watcher）可能存在索引延迟，偶见“找不到图片”占位提示。重启 Obsidian 即可触发全库索引扫描并正常渲染。
 
+### 步骤 8：Zotero 双向全量同步（学术闭环）
+
+知识库与 Zotero 本地客户端之间实现双向数据流闭环：
+
+```bash
+# 1. 元数据与附件对比（默认安全只读预览，杜绝静默破坏）
+python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 论文标题/第一作者 等 - 年份 - 论文标题.md"
+
+# 2. 确认差异并回写元数据 + 将 Markdown 阅读笔记推送为 Zotero 子笔记
+python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 论文标题/第一作者 等 - 年份 - 论文标题.md" \
+    --apply --report zotero-sync-report.json
+
+# 3. 双向拉取 Zotero PDF 中的划线高亮与批注至 Markdown 文档末尾
+python scripts/zotero_sync.py "./科研知识库/第一作者 等 - 年份 - 论文标题/第一作者 等 - 年份 - 论文标题.md" \
+    --pull-annotations --apply
+```
+- 详见 `references/zotero-sync.md`，支持通过 Zotero 官方 MCP 工具（`update_item`, `add_note`, `attach_pdf`, `save_highlights`）协同操作。
+
 ---
 
 ## 3. 自由度与边界 (Degrees of Freedom)
@@ -145,8 +168,11 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 | 操作维度 | 控制级别 | 规范边界 |
 | :--- | :--- | :--- |
 | **归一化与语法** | **严格收紧 (Zero Tolerance)** | 坐标转换公式、KaTeX 编译通过率必须 **100%**；严禁出现未闭合定界符、绝对路径或损坏图片链接。 |
+| **Zotero 数据回写** | **严格收紧 (Zero Tolerance)** | 默认只读 `--dry-run` 审查；必须显式传入 `--apply` 并提供审计日志，杜绝未授权静默篡改用户文献库。 |
 | **文献命名规范** | **严格收紧** | 学术论文默认统一采用 `{{firstCreator}} - {{year}} - {{title}}.md` 标准命名；支持 `--file` 自定义覆盖；禁止使用无意义的 `原文.md`。 |
+| **补充材料跨篇双链** | **严格收紧** | 必须采用标准 Obsidian `[[文档#锚点|显示名]]` 语法；跳过代码块与已存在链接，建立 `has_supplement` / `supplement_to` 拓扑双链。 |
 | **文档组织分流** | **严格收紧** | 专著教材/复习讲义保持多章节（`01-第一章.md`）分流架构；学术论文保持单篇一体化架构（主笔记+`00-目录.md`+`images/`）。 |
+| **多面板碎图缝合** | **分级自适应 (Adaptive)** | 高置信度子面板（明确子标签/同图号无冲突）全自动原地重裁；跨栏冲突或疑似多图号异常保留人工复核草稿。 |
 | **文件完整性** | **严格收紧** | 必须包含 `00-目录.md` 导航入口（标准 URI 编码）；图片全量可解码；严禁破坏性清空输出目录。 |
 | **排版与段落合并** | **自适应灵活 (Moderate)** | 根据书籍逻辑组织章节、保守处理段落；子图合并与图题改挂须有原页依据，确认后的图块边界不再自动合并。 |
 | **复杂化学/特殊结构** | **工程务实 (Pragmatic)** | 遇到二维环状分子或复杂推导，若 LaTeX 表达失真，优先采用高保真原图局域裁切，确保科学真实性。 |
@@ -166,12 +192,16 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 9. ❌ **标题公式剥离为裸下划线**：将标题中的 `$\mathrm{CO}_2$` 粗暴降级为 `CO_2`，不仅语法失真，还容易与同行的其他下划线产生 Markdown 斜体冲突。
 10. ❌ **把编译无错等同于客户端渲染完成**：在离线沙盒里仅验证 KaTeX 无报错，未校验真实 Markdown 宿主解析器（如 Obsidian）对外层方括号的语法劫持与链接冲突。
 11. ❌ **忽略跨平台路径长限制 (Windows MAX_PATH)**：在输出长题名学术文献时未对文件读写使用安全路径前缀（`\\?\`），导致路径达到 260 字符上限时报 `[WinError 3]` 写入崩溃。
+12. ❌ **静默覆写 Zotero 本地数据库**：未经 diff 确认和用户授权，自动化脚本静默篡改 Zotero 本地元数据或覆盖用户已有笔记。
+13. ❌ **孤立割裂主文与补充材料 (SI)**：将 SI 与主文作为两篇互不相干的文档孤立存放，未提取 S 编号与跨文档双链，导致学术上下文割裂。
 
 ---
 
 ## 5. 参考文档与工具链
 
 - `references/research-documents.md` — 学术文献（期刊/学位论文/预印本/独立PDF）标准命名、元数据frontmatter、双栏阅读流与验收规范
+- `references/zotero-sync.md` — Zotero 双向全量同步（元数据回写、笔记推送、批注拉取、附件审计）规范与 MCP 工具联动指南
+- `references/book-workflow.md` — 500+ 页学术专著与教材的切片、全局映射与分章节重组指南
 - `references/book-workflow.md` — 500+ 页学术专著与教材的切片、全局映射与分章节重组指南
 - `references/math-normalization.md` — 14 条科学公式归一化规则与真实例子
 - `references/mineru-api.md` — MinerU 官方契约、数据结构、归一化坐标与 DoH 连接策略

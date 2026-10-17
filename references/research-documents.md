@@ -71,6 +71,9 @@ python scripts/build_research_document.py \
 2. **补充材料与附录规范 (Supplemental Information / SI)**：
    - 期刊文献常附带独立补充材料（如 Elsevier 的 `mmc1.pdf`、Nature/Science 的 `Supporting Online Material`）；
    - 出版社制作的 SI PDF 属性 title 经常直接沿用主文标题；系统内置附录标题变体容错机制（自动支持 `Supplemental Information`、`Supporting Information`、`Supplementary Material`、`Appendix` 等后缀），放行合法衍生版本；
+   - **跨文档自动双链与 S 编号隔离**：
+     - 图表审核引擎自动识别 `Figure S1`、`Fig. S1`、`Table S1`、`Scheme S1` 与 `附图 S1`，统一纳入 `supplemental:` 独立命名空间，杜绝与正文图号发生串号或错误聚类；
+     - 构建主文时传入 `--si-doc <SI文档名>`，自动将正文中的 SI 引用转换为带锚点的 Obsidian 双链 `[[<SI文档名>#Figure S1|Figure S1]]`，并在文末生成补充材料导读；构建 SI 时传入 `--supplement-to <主文档名>`，顶部自动注入导读卡片，且两者在 frontmatter 中分别写入 `has_supplement` 与 `supplement_to`，形成完整双向知识网络。
    - 交付建议：输出至独立目录（如 `{{firstCreator}} - {{year}} - {{title}} - Supplemental Information`），并通过 `--file` 传入专有文件名，避免与主篇同名冲突。
 3. **双栏阅读流保持**：
    - 科研论文默认使用 `--reading-order source`，保留 OCR 按物理页核对的阅读流，避免双栏排版因几何高度重叠而发生栏间交错。

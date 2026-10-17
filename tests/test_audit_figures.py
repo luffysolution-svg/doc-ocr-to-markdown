@@ -8,7 +8,8 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 import sys
 sys.path.insert(0, str(SCRIPTS))
-from audit_figures import audit_page_images, audit_workspace, extract_figure_numbers
+from audit_figures import (audit_page_images, audit_workspace, extract_figure_numbers,
+                           generate_confident_repairs_for_blocks)
 
 
 class AuditFiguresTests(unittest.TestCase):
@@ -267,6 +268,38 @@ class AuditFiguresTests(unittest.TestCase):
             self.assertEqual(len(report['sources']), 1)
             self.assertEqual(report['sources'][0]['source_id'], 'paper/content_list.json')
             self.assertEqual(len(repairs), 2)  # Unambiguous single document produces 2 repairs (update + skip)
+
+    def test_supplemental_figure_numbers_and_namespaces(self):
+        for caption, expected in [
+            ('Figure S1. Supplemental crystal structure', 'supplemental:S1'),
+            ('Fig. S2: Adsorption energy curves', 'supplemental:S2'),
+            ('Figure S3-1. Multi panel comparison', 'supplemental:S3.1'),
+            ('图 S1 晶胞参数对比', 'supplemental:S1'),
+            ('附图 S2 能量曲线', 'supplemental:S2'),
+            ('附图 3 补充图', 'supplemental:S3'),
+        ]:
+            with self.subTest(caption=caption):
+                self.assertEqual(extract_figure_numbers([caption]), [expected])
+
+    def test_generate_confident_repairs_for_blocks(self):
+        blocks = [
+            {'type': 'image', '_page': 1, 'bbox': [100, 100, 400, 500],
+             'image_caption': ['Fig. 1. Overall scheme (a)']},
+            {'type': 'image', '_page': 1, 'bbox': [450, 100, 800, 500],
+             'image_caption': ['(b) Zoom in']},
+            {'type': 'image', '_page': 2, 'bbox': [100, 100, 400, 500],
+             'image_caption': ['Fig. S1. Supplemental structure (a)']},
+            {'type': 'image', '_page': 2, 'bbox': [450, 100, 800, 500],
+             'image_caption': ['(b) Zoomed detail']},
+        ]
+        repairs = generate_confident_repairs_for_blocks(blocks)
+        self.assertEqual(len(repairs), 4)
+        page1_update = next(r for r in repairs if r['page'] == 1 and r['action'] == 'update_image')
+        page2_update = next(r for r in repairs if r['page'] == 2 and r['action'] == 'update_image')
+        self.assertEqual(page1_update['confidence'], 'high')
+        self.assertEqual(page2_update['confidence'], 'high')
+        self.assertIn('Fig. 1. Overall scheme (a)', page1_update['image_caption'])
+        self.assertIn('Fig. S1. Supplemental structure (a)', page2_update['image_caption'])
 
 
     def test_manifest_ambiguous_content_paths_are_rejected(self):

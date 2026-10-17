@@ -26,11 +26,12 @@ from build_support import contained, relative_name
 from console_output import safe_print as print
 
 FIG_NUM_PATTERN = re.compile(r'图\s*(\d+(?:[.\-．]\d+)*)')
+ZH_SUPP_FIG_PATTERN = re.compile(r'(?:附图\s*(?:S)?|图\s*S)\s*(\d+(?:[.\-．]\d+)*)', re.IGNORECASE)
 # English references in the caption body are not caption labels. Do not use
 # MULTILINE: a wrapped "Fig. 2" reference is still part of the caption body.
 EN_FIG_PREFIX_PATTERN = re.compile(
     r'\A\s*(?P<extended>Extended\s+Data\s+)?(?:Figure|Fig\.?)\s*'
-    r'(?P<number>\d+(?:[.\-．]\d+)*)\b', re.IGNORECASE)
+    r'(?P<supp>S)?(?P<number>\d+(?:[.\-．]\d+)*)\b', re.IGNORECASE)
 PANEL_TAG_PATTERN = re.compile(r'^\s*\(?[a-zA-Z]\)?\s*$')
 
 
@@ -49,7 +50,8 @@ def extract_figure_numbers(captions: list[str]) -> list[str]:
 
     Main Figure/Fig. labels share the existing numeric namespace with 图.
     Extended Data labels use ``extended-data:`` so Fig. 1 cannot cluster with
-    Extended Data Fig. 1. Each caption list entry can supply one English label.
+    Extended Data Fig. 1. Supporting Information labels (Figure S1, Fig. S1, 图 S1)
+    use ``supplemental:`` namespace. Each caption list entry can supply one English label.
     """
     numbers = []
     for cap in captions:
@@ -58,10 +60,17 @@ def extract_figure_numbers(captions: list[str]) -> list[str]:
             num = english.group('number').replace('．', '.').replace('-', '.')
             if english.group('extended'):
                 num = f'extended-data:{num}'
+            elif english.group('supp'):
+                num = f'supplemental:S{num}'
             numbers.append(num)
-        for m in FIG_NUM_PATTERN.finditer(cap):
+        for m in ZH_SUPP_FIG_PATTERN.finditer(cap):
             num = re.sub(r'\s+', '', m.group(1)).replace('．', '.').replace('-', '.')
-            numbers.append(num)
+            numbers.append(f'supplemental:S{num}')
+        for m in FIG_NUM_PATTERN.finditer(cap):
+            # Avoid re-adding if already added as supplemental
+            num = re.sub(r'\s+', '', m.group(1)).replace('．', '.').replace('-', '.')
+            if f'supplemental:S{num}' not in numbers:
+                numbers.append(num)
     return list(dict.fromkeys(numbers))
 
 
@@ -79,8 +88,12 @@ def box_area(b: list[float]) -> float:
     return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
 
 
-def audit_page_images(page_num: int, blocks: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
-    """Audit images on a single page, proposing candidate clusters and flagging anomalies."""
+def audit_page_images(page_num: int, blocks: list[dict], confident_only: bool = False) -> tuple[list[dict], list[dict], list[dict]]:
+    """Audit images on a single page, proposing candidate clusters and flagging anomalies.
+
+    If ``confident_only`` is True, only high-confidence repairs (unambiguous panel clustering,
+    reasonable bounding box, no conflicting multi-figure numbers) are returned.
+    """
     images = [(i, b) for i, b in enumerate(blocks) if b.get('type') in ('image', 'chart')]
     if not images:
         return [], [], []
@@ -180,6 +193,23 @@ def audit_page_images(page_num: int, blocks: list[dict]) -> tuple[list[dict], li
                     f'{typ}_caption': extract_captions(first_block),
                     f'{typ}_footnote': extract_footnotes(first_block),
                 }
+
+                # Assess confidence
+                has_anomaly = any(a.get('kind') == 'multiple_figure_numbers' for a in page_anomalies)
+                union_area = box_area(union_b)
+                is_confident = (
+                    not has_anomaly and
+                    0 < union_area <= 920000 and
+                    (len(by_num) == 1 or all(
+                        any(PANEL_TAG_PATTERN.match(c) for c in extract_captions(b)) or
+                        extract_figure_numbers(extract_captions(b)) == [num]
+                        for _, b in group
+                    ))
+                )
+                confidence = 'high' if is_confident else 'manual_review'
+                if confident_only and not is_confident:
+                    continue
+
                 reason = (f'待原页人工确认：第{page_num}页图号标识 {num} 的{len(group)}个图块'
                           '可能为碎片面板；候选外接框及碎块移除仅为草稿，尚未核实')
                 page_repairs.append({
@@ -189,6 +219,7 @@ def audit_page_images(page_num: int, blocks: list[dict]) -> tuple[list[dict], li
                     'old': old_snap,
                     'new_bbox': union_b,
                     'image_caption': all_caps,
+                    'confidence': confidence,
                     'reason': reason,
                 })
                 for idx, b in group[1:]:
@@ -197,6 +228,7 @@ def audit_page_images(page_num: int, blocks: list[dict]) -> tuple[list[dict], li
                         'bbox': b.get('bbox'),
                         'action': 'skip',
                         'old': '',
+                        'confidence': confidence,
                         'reason': reason,
                     })
 
@@ -221,7 +253,25 @@ def audit_page_images(page_num: int, blocks: list[dict]) -> tuple[list[dict], li
     return inventory, page_repairs, page_anomalies
 
 
-def audit_workspace(root: Path, manifest_path: Path | None = None) -> tuple[dict, list[dict]]:
+def generate_confident_repairs_for_blocks(blocks: list[dict]) -> list[dict]:
+    """Generate high-confidence figure repair directives directly from blocks.
+
+    Can be called by build_markdown.py or build_research_document.py to automatically
+    stitch split multi-panel figures without requiring pre-generated repairs JSON.
+    """
+    by_page = collections.defaultdict(list)
+    for b in blocks:
+        page = b.get('_page') if b.get('_page') is not None else (b.get('page_idx', 0) + 1)
+        by_page[page].append(b)
+
+    all_repairs = []
+    for page in sorted(by_page):
+        _, reps, _ = audit_page_images(page, by_page[page], confident_only=True)
+        all_repairs.extend(reps)
+    return all_repairs
+
+
+def audit_workspace(root: Path, manifest_path: Path | None = None, confident_only: bool = False) -> tuple[dict, list[dict]]:
     """Report each OCR source explicitly; return a flat draft only if unambiguous.
 
     Without a manifest, content lists are independent documents with local pages.
@@ -296,7 +346,7 @@ def audit_workspace(root: Path, manifest_path: Path | None = None) -> tuple[dict
                     raise ValueError(f'ambiguous manifest page {page}: '
                                      f'{manifest_pages[page]} and {source_id}')
                 manifest_pages[page] = source_id
-            inv, reps, anoms = audit_page_images(page, by_page[pi])
+            inv, reps, anoms = audit_page_images(page, by_page[pi], confident_only=confident_only)
             # Keep provenance in the report, not in the strict repair records.
             inventory.extend({**item, 'source_id': source_id} for item in inv)
             repairs.extend(reps)
@@ -323,7 +373,7 @@ def audit_workspace(root: Path, manifest_path: Path | None = None) -> tuple[dict
         'proposed_repairs': len(all_repairs),
         'anomalies_detected': len(all_anomalies),
         'anomalies': all_anomalies,
-        'repair_status': 'draft_requires_manual_source_confirmation',
+        'repair_status': 'auto_confident_applied' if confident_only else 'draft_requires_manual_source_confirmation',
         'repair_output_allowed': repair_output_allowed,
         'sources': sources,
         'inventory_summary': {
@@ -340,12 +390,13 @@ def main() -> None:
     parser.add_argument('--manifest', help='可选 manifest.json 路径')
     parser.add_argument('--out-repairs', help='输出待人工回源确认的草稿；无 manifest 时仅支持单文档')
     parser.add_argument('--out-report', help='输出含来源路径、本地/全局页码及逐来源草稿的审查报告 JSON')
+    parser.add_argument('--confident-only', action='store_true', help='仅导出高置信度可自动缝合的修复规则')
     args = parser.parse_args()
 
     target = Path(args.path).resolve()
     manifest = Path(args.manifest).resolve() if args.manifest else None
     try:
-        report, repairs = audit_workspace(target, manifest)
+        report, repairs = audit_workspace(target, manifest, confident_only=args.confident_only)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     if args.out_repairs and not report['repair_output_allowed']:
