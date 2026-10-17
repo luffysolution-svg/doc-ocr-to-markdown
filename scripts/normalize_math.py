@@ -420,16 +420,106 @@ def split_leading_prose(tex: str) -> tuple[str | None, str, str | None]:
     return fragment, core, closer + tail[2]
 
 
+SUB_MAP = str.maketrans('0123456789+-=()aehijklmnoprstuvx', '₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ')
+SUP_MAP = str.maketrans('0123456789+-=()ni', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ')
+
+
+def _sub_repl(m: re.Match) -> str:
+    return m.group(1).translate(SUB_MAP)
+
+
+def _sup_repl(m: re.Match) -> str:
+    return m.group(1).translate(SUP_MAP)
+
+
 def plain_text(text: str) -> str:
     """Lossy plain-text helper for headings/alt; never used on formula bodies."""
     text = re.sub(r'\\(?:mathrm|mathbf|text|operatorname|mathit)\{([^{}]*)\}', r'\1', text)
     symbols = {**GREEK, **MISC}
     text = re.sub(r'\\[A-Za-z]+', lambda m: symbols.get(m[0], m[0]), text)
     text = re.sub(r'\\([a-zA-Z]+)', lambda m: ' ' + m[1] if len(m[1]) > 1 else m[1], text)
+    text = re.sub(r'_\{([^{}]+)\}', _sub_repl, text)
+    text = re.sub(r'_([0-9a-zA-Z+-=()])', _sub_repl, text)
+    text = re.sub(r'\^\{([^{}]+)\}', _sup_repl, text)
+    text = re.sub(r'\^([0-9+-=()ni])', _sup_repl, text)
     text = text.replace('$', '').replace('^2', '²').replace('^3', '³')
     text = re.sub(r'\s*\{\s*°\s*\}', '°', text)
     text = re.sub(r'[{}]', '', text).replace('*', '')
     return re.sub(r'\s+', ' ', text).strip()
+
+
+def normalize_heading(text: str) -> str:
+    """Format heading text preserving math formulas and avoiding bare underscore pseudo-subscripts."""
+    text = re.sub(r'^\\\*\s*|^[*＊]\s*', '★ ', text.strip())
+    # Unwrap top-level font wrappers outside math
+    text = re.sub(r'\\(?:textbf|mathbf)\{([^{}]*)\}', r'\1', text)
+    # If text has math spans, normalize math inside them while protecting non-math parts
+    spans, _ = scan_math(text)
+    if spans:
+        out, cursor = [], 0
+        for span in spans:
+            prose = text[cursor:span.start()]
+            prose = re.sub(r'(?<=[A-Za-z\u4e00-\u9fff])_([0-9a-zA-Z+-=()])', _sub_repl, prose)
+            prose = re.sub(r'(?<=[A-Za-z\u4e00-\u9fff])_\{([^{}]+)\}', _sub_repl, prose)
+            out.append(prose)
+            body = normalize_math(span.body)
+            close = {r'\(': r'\)', r'\[': r'\]'}.get(span.delimiter, span.delimiter)
+            out.extend((span.delimiter, body, close))
+            cursor = span.end()
+        tail = text[cursor:]
+        tail = re.sub(r'(?<=[A-Za-z\u4e00-\u9fff])_([0-9a-zA-Z+-=()])', _sub_repl, tail)
+        tail = re.sub(r'(?<=[A-Za-z\u4e00-\u9fff])_\{([^{}]+)\}', _sub_repl, tail)
+        out.append(tail)
+        res = ''.join(out)
+    else:
+        res = re.sub(r'(?<=[A-Za-z\u4e00-\u9fff])_([0-9a-zA-Z+-=()])', _sub_repl, text)
+        res = re.sub(r'(?<=[A-Za-z\u4e00-\u9fff])_\{([^{}]+)\}', _sub_repl, res)
+    return re.sub(r'[ \t]+', ' ', res).strip()
+
+
+def normalize_prose_brackets(text: str) -> str:
+    """Normalize non-syntactic ASCII square brackets in prose to Chinese full-width ［...］.
+
+    Prevents Markdown/Obsidian link parser from intercepting explanatory brackets containing
+    math or Chinese text, while preserving actual Markdown links, images, footnotes, and citations.
+    """
+    spans, _ = scan_math(text)
+    if not spans:
+        def simple_repl(m: re.Match) -> str:
+            inner = m.group(1)
+            if re.fullmatch(r'[\d\s,–—\-]+', inner) or inner.startswith('^'):
+                return m.group(0)
+            if re.search(r'[\u4e00-\u9fff]', inner):
+                return f'［{inner}］'
+            return m.group(0)
+        return re.sub(r'(?<!\!)\[([^[\]\n]+)\](?!\(|\[|:)', simple_repl, text)
+
+    # Protect math spans with placeholders
+    masked_pieces = []
+    cursor = 0
+    math_map = {}
+    for i, span in enumerate(spans):
+        masked_pieces.append(text[cursor:span.start()])
+        ph = f'\x00MATH{i}\x00'
+        math_map[ph] = text[span.start():span.end()]
+        masked_pieces.append(ph)
+        cursor = span.end()
+    masked_pieces.append(text[cursor:])
+    masked_text = ''.join(masked_pieces)
+
+    def repl(m: re.Match) -> str:
+        inner = m.group(1)
+        if re.fullmatch(r'[\d\s,–—\-]+', inner) or inner.startswith('^'):
+            return m.group(0)
+        if '\x00MATH' in inner or re.search(r'[\u4e00-\u9fff]', inner):
+            return f'［{inner}］'
+        return m.group(0)
+
+    masked_text = re.sub(r'(?<!\!)\[([^[\]\n]+)\](?!\(|\[|:)', repl, masked_text)
+
+    for ph, orig in math_map.items():
+        masked_text = masked_text.replace(ph, orig)
+    return masked_text
 
 
 def math_issues(body: str) -> list[str]:
@@ -498,7 +588,7 @@ def process(text: str) -> str:
             out.append(trailing)
         cursor = span.end()
     out.append(text[cursor:])
-    return fix_inline_parens(''.join(out))
+    return normalize_prose_brackets(fix_inline_parens(''.join(out)))
 
 
 def main() -> None:

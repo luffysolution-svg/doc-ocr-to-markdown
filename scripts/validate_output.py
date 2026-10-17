@@ -84,8 +84,15 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
         if current - previous > 1:
             errors.append(f'{name}: 标题层级跳跃 {previous}→{current}')
     for _, title in headings:
-        if '\\' in title or '$' in title:
-            errors.append(f'{name}: 标题含公式残留「{title[:40]}」')
+        spans, issues = scan_math(title)
+        if issues:
+            errors.append(f'{name}: 标题公式语法错误「{title[:40]}」')
+        else:
+            prose = title
+            for s in reversed(spans):
+                prose = prose[:s.start()] + prose[s.end():]
+            if '\\' in prose:
+                errors.append(f'{name}: 标题含未转义宏命令残留「{title[:40]}」')
 
     # 公式
     math_spans, syntax_issues = scan_math(text)

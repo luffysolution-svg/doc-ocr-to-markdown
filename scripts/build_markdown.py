@@ -37,13 +37,13 @@ from collections import Counter, defaultdict
 from contextlib import ExitStack
 from urllib.parse import quote
 
-from build_support import Publisher, asset_path, contained, load_book, read_items, relative_name, RESERVED
+from build_support import Publisher, asset_path, contained, load_book, read_items, relative_name, RESERVED, OWNERSHIP, digest
 from difflib import SequenceMatcher
 from pathlib import Path
 from unicodedata import normalize
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from normalize_math import normalize_math, plain_text, split_leading_prose, process
+from normalize_math import normalize_math, plain_text, split_leading_prose, process, normalize_heading
 
 try:
     from PIL import Image
@@ -679,7 +679,7 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                         level = max(2, min(5, len(m.group(1).split('.'))))
                     elif re.match(r'^第[一二三四五六七八九十百\d]+章', text):
                         level = 2
-                    disp = heading_text(text) if mode == 'book' else (plain_text(text) if ('\\' in text or '$' in text) else text)
+                    disp = normalize_heading(text)
                     level = min(level, previous_level + 1)
                     previous_level = level
                     emit.append('#' * level + ' ' + disp)
@@ -769,6 +769,13 @@ def _render_pages(by_page, source_pages, pdf, image_dir, title, review, ocr_dir,
                     code_blocks.add(code)
                     emit.append(code)
                 continue
+            if kind == 'ref_text':
+                raw_ref = item.get('text', '')
+                text = re.sub(r'[ \t]+', ' ', str(raw_ref)).strip()
+                if text and not LABEL_ONLY.match(text):
+                    emit.append(inline_math(text))
+                    stats['paragraphs'] += 1
+                continue
             if item.get('text'):
                 text = re.sub(r'[ \t]+', ' ', str(item['text'])).strip()
                 if text and not LABEL_ONLY.match(text):
@@ -803,6 +810,7 @@ def main() -> None:
                         help='geometry 按高度排序；source 保留经核对的 OCR 阅读顺序（双栏论文）')
     parser.add_argument('--metadata-json', help='JSON：章节 id 到已核对元数据的映射，发布前写入 YAML frontmatter')
     parser.add_argument('--clean', action='store_true', help='已禁用：拒绝目录清理')
+    parser.add_argument('--prune-orphans', action='store_true', help='清理交付目录中历史版本遗留但当前未引用的切图文件')
     parser.add_argument('--overwrite', action='store_true', help='显式覆盖所有权清单中已被修改的生成文件，绝不覆盖未登记文件')
     parser.add_argument('--manifest', help='分片清单 JSON 路径（支持多批块大文档组装与全局页码偏移计算）')
     parser.add_argument('--chapters', help='章节划分 JSON 路径（按起止页重组为规范教材章节）')
@@ -993,7 +1001,60 @@ def main() -> None:
              'paragraph_joining': 'disabled: conservative preservation of OCR paragraph/page boundaries'},
             ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         publisher.publish(stage)
+        if args.prune_orphans:
+            _prune_orphan_images(out_root, publisher.state_root)
     print(f'装配完成：更新 {len(updated)} 章，目录保留 {len(report)} 章')
+
+
+def _prune_orphan_images(out_root: Path, state_root: Path) -> int:
+    """Safely remove unreferenced image assets owned by the builder."""
+    ledger_path = contained(state_root, OWNERSHIP)
+    if not ledger_path.exists():
+        ledger_path = contained(out_root, OWNERSHIP)
+    if not ledger_path.exists():
+        return 0
+    try:
+        data = json.loads(ledger_path.read_text(encoding='utf-8'))
+        owned = data.get('files', {})
+    except Exception:
+        return 0
+
+    referenced = set()
+    for md_file in out_root.rglob('*.md'):
+        if not md_file.is_file():
+            continue
+        try:
+            content = md_file.read_text(encoding='utf-8')
+            for match in re.findall(r'!\[.*?\]\(([^)]+)\)', content):
+                target = match.split('?')[0].strip()
+                resolved = (md_file.parent / target).resolve()
+                if resolved.is_relative_to(out_root.resolve()):
+                    referenced.add(resolved.relative_to(out_root.resolve()).as_posix())
+        except Exception:
+            continue
+
+    pruned = 0
+    updated_owned = dict(owned)
+    for rel_path, expected_digest in list(owned.items()):
+        if not rel_path.startswith('images/'):
+            continue
+        if rel_path not in referenced:
+            actual_file = contained(out_root, rel_path)
+            if actual_file.is_file():
+                try:
+                    if digest(actual_file.read_bytes()) == expected_digest:
+                        actual_file.unlink()
+                        del updated_owned[rel_path]
+                        pruned += 1
+                except Exception:
+                    pass
+
+    if pruned > 0:
+        ledger_data = json.dumps({'version': 1, 'files': updated_owned},
+                                 ensure_ascii=False, indent=2) + '\n'
+        ledger_path.write_text(ledger_data, encoding='utf-8')
+        print(f'已清理 {pruned} 个未引用的旧切图文件')
+    return pruned
 
 
 if __name__ == '__main__':

@@ -70,7 +70,12 @@ def render_markdown(text: str) -> str:
         diagnostic = f' data-error="{html.escape("; ".join(errors), quote=True)}"' if errors else ''
         formulas.append((key, f'<{tag} class="{cls}" data-display="{str(span.display).lower()}"{diagnostic}>'
                          f'{html.escape(span.body.strip())}</{tag}>'))
-        pieces.extend((text[cursor:span.start()], f'\n\n{key}\n\n' if span.display else key))
+        before = text[cursor:span.start()]
+        if span.display:
+            nl_prefix = '' if before.endswith('\n\n') else ('\n' if before.endswith('\n') else '\n\n')
+            pieces.extend((before, f'{nl_prefix}{key}\n\n'))
+        else:
+            pieces.extend((before, key))
         cursor = span.end()
     pieces.append(text[cursor:])
     body = markdown.markdown(''.join(pieces), extensions=['tables', 'fenced_code', 'footnotes'])

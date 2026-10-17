@@ -739,6 +739,53 @@ class BuildTests(unittest.TestCase):
         self.assertIn('$x << R_c$', res)
         self.assertIn('$A < B$', res)
 
+    def test_heading_preserves_math_formula(self):
+        self.part('ch01', [
+            block(text='1.3.2 $\\mathrm{CO}_2$ 辅助乙烷脱氢', text_level=2),
+            block(text='正文内容')
+        ])
+        self.cli('--mode', 'book')
+        text = self.text()
+        self.assertIn('## 1.3.2 $\\mathrm{CO}_2$ 辅助乙烷脱氢', text)
+        self.assertNotIn('CO_2', text)
+
+    def test_ref_text_native_handling(self):
+        self.part('ch01', [
+            block(text='[1] Author. Title[J]. Journal, 2026.', kind='ref_text')
+        ])
+        self.cli('--mode', 'book')
+        text = self.text()
+        self.assertIn('[1] Author. Title[J]. Journal, 2026.', text)
+
+    def test_prune_orphan_images(self):
+        # Create an owned image that is referenced, and an owned image that is orphaned
+        self.part('ch01', [
+            block(kind='image', img_path='figure1.png', bbox=[100, 200, 300, 400],
+                  image_caption=['图 1 测试']),
+            block(text='正文')
+        ])
+        # Add a dummy figure1.png in ocr dir
+        ch_dir = self.raw / 'ch01'
+        (ch_dir / 'figure1.png').write_bytes(png('blue'))
+        self.cli('--mode', 'book')
+        # Verify figure cropped/stored
+        state_dir = self.out.parent / f'.{self.out.name}.build'
+        ownership_file = state_dir / OWNERSHIP
+        data = json.loads(ownership_file.read_text(encoding='utf-8'))
+        # Create an artificial orphan image in out/images/ch01/orphan.png and register it in ownership
+        orphan_path = self.out / 'images' / 'ch01' / 'orphan.png'
+        orphan_bytes = png('green')
+        orphan_path.write_bytes(orphan_bytes)
+        orphan_rel = 'images/ch01/orphan.png'
+        data['files'][orphan_rel] = build.digest(orphan_bytes)
+        ownership_file.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        self.assertTrue(orphan_path.exists())
+        pruned = build._prune_orphan_images(self.out, state_dir)
+        self.assertEqual(pruned, 1)
+        self.assertFalse(orphan_path.exists())
+        new_data = json.loads(ownership_file.read_text(encoding='utf-8'))
+        self.assertNotIn(orphan_rel, new_data['files'])
+
 
 if __name__ == '__main__':
     unittest.main()

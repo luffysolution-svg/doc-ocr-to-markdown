@@ -11,7 +11,8 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 from normalize_math import (normalize_math, process, scan_math, math_issues,
-                            fix_inline_parens, protected_markdown, plain_text)
+                            fix_inline_parens, protected_markdown, plain_text,
+                            normalize_heading, normalize_prose_brackets)
 from extract_formulas import extract
 
 
@@ -121,6 +122,35 @@ class MathTests(unittest.TestCase):
 
     def test_plain_symbols_match_complete_control_words(self):
         self.assertEqual(plain_text(r'\subseteq \infty \neq'), 'subseteq ∞ neq')
+
+    def test_plain_text_subscripts_and_superscripts(self):
+        self.assertEqual(plain_text(r'CO_2'), 'CO₂')
+        self.assertEqual(plain_text(r'\mathrm{CO}_{2}'), 'CO₂')
+        self.assertEqual(plain_text(r'Al_2O_3@Fe_3O_4'), 'Al₂O₃@Fe₃O₄')
+        self.assertEqual(plain_text(r'H_2-TPR'), 'H₂-TPR')
+        self.assertEqual(plain_text(r'N_2'), 'N₂')
+        self.assertEqual(plain_text(r'x^2 + y^3'), 'x² + y³')
+
+    def test_normalize_heading_preserves_math_and_subscripts(self):
+        self.assertEqual(normalize_heading(r'1.3.2 $\mathrm{CO}_2$ 辅助乙烷脱氢'), r'1.3.2 $\mathrm{CO}_2$ 辅助乙烷脱氢')
+        self.assertEqual(normalize_heading(r'\textbf{1.3.2} $\mathrm{CO}_2$ 辅助乙烷脱氢'), r'1.3.2 $\mathrm{CO}_2$ 辅助乙烷脱氢')
+        self.assertEqual(normalize_heading(r'### 1.3.2 CO_2 辅助乙烷脱氢'), r'### 1.3.2 CO₂ 辅助乙烷脱氢')
+        self.assertEqual(normalize_heading(r'3.4.5 程序升温脱附（ $\mathrm{NH}_3$ -TPD， $\mathrm{CO}_2$ -TPD）'),
+                         r'3.4.5 程序升温脱附（ $\mathrm{NH}_3$ -TPD， $\mathrm{CO}_2$ -TPD）')
+        self.assertEqual(normalize_heading(r'Al_2O_3@Fe_3O_4'), r'Al₂O₃@Fe₃O₄')
+
+    def test_normalize_prose_brackets_and_process(self):
+        self.assertEqual(process(r'先验分布 $p(z)$ [通常为 $\mathcal{N}(0, I)$ ]。这种正则化'),
+                         r'先验分布 $p(z)$ ［通常为 $\mathcal{N}(0, I)$ ］。这种正则化')
+        self.assertEqual(process(r'信息[即 $M=(A_{\mathrm{asu}}, X_{\mathrm{asu}}, S, L)$ ，其中 $A_{\mathrm{asu}}$ ... L 为晶格参数]。在此基础上'),
+                         r'信息［即 $M=(A_{\mathrm{asu}}, X_{\mathrm{asu}}, S, L)$ ，其中 $A_{\mathrm{asu}}$ ... L 为晶格参数］。在此基础上')
+        self.assertEqual(process(r'潜空间模型[变分自编码器(VAE) $^{[17]}$ 和生成对抗网络(GAN) $^{[18-19]}$ ]、扩散/流模型'),
+                         r'潜空间模型［变分自编码器(VAE) $^{[17]}$ 和生成对抗网络(GAN) $^{[18-19]}$ ］、扩散/流模型')
+        self.assertEqual(process(r'方法之一[29-30]，该表示法'), r'方法之一[29-30]，该表示法')
+        self.assertEqual(process(r'SMILES $^{[3]}$ 、国际化合物'), r'SMILES $^{[3]}$ 、国际化合物')
+        self.assertEqual(process(r'![数据表原图](images/6DXKSD7N/abc.png)'), r'![数据表原图](images/6DXKSD7N/abc.png)')
+        self.assertEqual(process(r'[链接文字](https://example.com)'), r'[链接文字](https://example.com)')
+        self.assertEqual(process(r'[1] WALTERS W P, MURCKO M. Assessing'), r'[1] WALTERS W P, MURCKO M. Assessing')
 
     def test_stuck_vert_and_inequalities_normalized(self):
         self.assertEqual(normalize_math(r'\vertz_+ z_-\vert'), r'\vert z_+ z_-\vert')

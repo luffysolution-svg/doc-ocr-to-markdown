@@ -74,6 +74,10 @@ OCR 会出现形近字、同音字或英文字母误识（如“轫致辐射”�
 - 保留文本分组语义；有歧义的嵌套分组和标点回源确认后再修；
 - 修复粘连命令：`\vert` 与变量字母粘连（如 `\vertz` → `\vert z`、`\vertj` → `\vert j`、`\vertHg` → `\vert Hg`），`\cdotkg` → `\cdot kg`；
 - 化学配离子与物态消歧：涉及 `[Fe(CN)6](aq)` 等配合物物态时，正文中统一放入 `$\mathrm{...}$` 环境，避免 CommonMark 将 `[配合物](aq)` 误贪婪匹配为超链接；校验器内置化学常见物态（`aq`, `s`, `l`, `g`, `sln`, `cr`）保护规则；
+- 标题公式保全：标题中的化学分子式与数学符号必须完整保留行内公式语法（如 `$\mathrm{CO}_2$`）；纯文本降级时必须转为 Unicode 下标（如 `CO₂`），严禁保留破坏性的裸下划线伪代码；
+- 解释性方括号排版防劫持：正文中非超链接、非图片、非数字引用编号的解释性方括号，若内部包含公式 `$..$` 或中文说明，一律规范化为中文全角方括号 `［...］`，避免 Obsidian 将其误判为快捷链接导致公式无法渲染且源码着色为蓝；
+- 参考文献原生段落支持：`ref_text` 由解析器原生转换为正文段落，不再依赖外挂的 `set_type: body_text` 修复规则；
+- 孤儿切图安全清理：开启 `--prune-orphans` 可在重新构建后自动核对 `.build-ownership.json`，安全剔除因微调裁框遗留的未引用旧切图；
 - 化学下标处于文本模式时，核对后用数学模式保留其下标，例如 `\text{NH_4Cl}` → `\mathrm{NH_4Cl}`；
 - 多重式号、未知命令、化学结构及跨正文括号须回看原页确认，通过 `--repairs` 显式应用，不自动猜测编号或物理含义；
 - 编译通过只证明语法可接受；二维结构失真时保留原版裁图。
@@ -131,6 +135,7 @@ node scripts/validate_math.cjs formulas.json
 python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/node_modules/katex/dist
 ```
 - 打开 `http://127.0.0.1:8766/` 验证 `document.documentElement.dataset.ready === "true"` 且 `.math-error` 数量为 0；检查各章实际图片数量与加载状态。加载成功只证明文件可显示，异常图仍须逐幅对照原页确认面板、题注和裁框完整。
+- **客户端真实渲染终验**：**“公式语法编译通过 ≠ 客户端显示正常”**。本地沙箱通过后，最终交付必须在实际宿主客户端（如 Obsidian）中核验阅读与实时预览视图，确保没有被 Markdown 语法劫持的伪链接或裸公式。
 - **Obsidian 客户端兼容提示**：在瞬间批量写入数百张新插图时，Obsidian 后台文件监视器（File Watcher）可能存在索引延迟，偶见“找不到图片”占位提示。重启 Obsidian 即可触发全库索引扫描并正常渲染。
 
 ---
@@ -158,6 +163,8 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 6. ❌ **丢弃表格内嵌图片**：提取表格时使用纯文本截断，导致关键二维码、实验图标全部遗失。
 7. ❌ **残留模型提示词**：把 OCR 模型的“The Ground Truth image displays...”等幻觉说明写入知识库。
 8. ❌ **盲信 OCR 块原始顺序**：忽略扫描排版与 OCR 提取序列的不一致，长篇教材必须由几何自然流混排，严禁将底部插图置于页首。
+9. ❌ **标题公式剥离为裸下划线**：将标题中的 `$\mathrm{CO}_2$` 粗暴降级为 `CO_2`，不仅语法失真，还容易与同行的其他下划线产生 Markdown 斜体冲突。
+10. ❌ **把编译无错等同于客户端渲染完成**：在离线沙盒里仅验证 KaTeX 无报错，未校验真实 Markdown 宿主解析器（如 Obsidian）对外层方括号的语法劫持与链接冲突。
 
 ---
 
@@ -165,6 +172,6 @@ python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/nod
 
 - `references/research-documents.md` — 学术文献（期刊/学位论文/预印本/独立PDF）标准命名、元数据frontmatter、双栏阅读流与验收规范
 - `references/book-workflow.md` — 500+ 页学术专著与教材的切片、全局映射与分章节重组指南
-- `references/math-normalization.md` — 12 条科学公式归一化规则与真实例子
+- `references/math-normalization.md` — 14 条科学公式归一化规则与真实例子
 - `references/mineru-api.md` — MinerU 官方契约、数据结构、归一化坐标与 DoH 连接策略
 - `examples/RESULTS.md` — 包含《材料分析测试方法》PPT课件与《物理化学（第六版）下册》556页超长教材全流程实战成果
