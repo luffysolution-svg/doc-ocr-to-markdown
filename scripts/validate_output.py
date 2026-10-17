@@ -23,6 +23,7 @@ import re
 import sys
 from console_output import safe_print as print
 from collections import Counter
+import os
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -59,10 +60,17 @@ WARN_PATTERNS = [
 ]
 
 
+def _safe_path(p: Path) -> Path:
+    s = os.path.abspath(str(p))
+    if os.name == 'nt' and not s.startswith('\\\\?\\'):
+        return Path('\\\\?\\' + s)
+    return p
+
+
 def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tuple[list, list, dict]:
     errors: list[str] = []
     warnings: list[str] = []
-    text = path.read_text(encoding='utf-8')
+    text = _safe_path(path).read_text(encoding='utf-8')
     from markdown_metadata import mask_frontmatter
     text = mask_frontmatter(text)
     name = path.name
@@ -152,7 +160,7 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
                     if decoded.startswith('/') or not target.is_relative_to(asset_root):
                         errors.append(f'{name}: 图片路径越出知识库 {dest}')
                         continue
-                if not target.exists():
+                if not _safe_path(target).exists():
                     if child.type == 'link_open' and decoded.lower() in ('aq', 's', 'l', 'g', 'sln', 'cr'):
                         continue
                     errors.append(f'{name}: 链接失效 {dest}')
@@ -166,7 +174,7 @@ def check_file(path: Path, images_dir: Path | None, image_hashes: Counter) -> tu
                         errors.append(f'{name}: 图片说明含公式符号（会破坏 image 标签）「{alt[:40]}」')
                     if Image is not None:
                         try:
-                            with Image.open(target) as im:
+                            with Image.open(_safe_path(target)) as im:
                                 im.verify()
                         except Exception as exc:
                             errors.append(f'{name}: 图片损坏 {dest}: {exc}')

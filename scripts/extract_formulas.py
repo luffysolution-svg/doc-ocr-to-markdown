@@ -11,16 +11,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from console_output import safe_print as print
 
 from normalize_math import scan_math, math_issues
 
 
+def _safe_path(p: Path) -> Path:
+    s = os.path.abspath(str(p))
+    if os.name == 'nt' and not s.startswith('\\\\?\\'):
+        return Path('\\\\?\\' + s)
+    return p
+
+
 def extract(root: Path) -> list[dict]:
     records = []
     for path in sorted(root.rglob('*.md')):
-        text = path.read_text(encoding='utf-8')
+        text = _safe_path(path).read_text(encoding='utf-8')
         spans, issues = scan_math(text)
         filename = path.relative_to(root).as_posix()
         for span in spans:
@@ -55,9 +63,9 @@ def main() -> None:
     print(f'共 {len(valid)} 个公式（独立 {display}，行内 {len(valid) - display}），定界错误 {parse_errors}')
 
     if args.out:
-        target = Path(args.out)
+        target = _safe_path(Path(args.out))
         target.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding='utf-8')
-        print(f'已写入 {target}')
+        print(f'已写入 {args.out}')
     if any(record.get('errors') for record in records):
         raise SystemExit(1)
 

@@ -232,14 +232,23 @@ class Publisher:
                 directory.mkdir()
                 created_dirs.append(directory)
 
+        def _win_safe(p: Path | str) -> str:
+            s = os.path.abspath(str(p))
+            if os.name == 'nt' and not s.startswith('\\\\?\\'):
+                return '\\\\?\\' + s
+            return s
+
         def replace_bytes(path: Path, data: bytes) -> None:
             fd, temporary = tempfile.mkstemp(prefix='.tmp.', suffix='.tmp', dir=path.parent)
             try:
                 with os.fdopen(fd, 'wb') as stream:
                     stream.write(data)
-                os.replace(temporary, path)
+                os.replace(_win_safe(temporary), _win_safe(path))
             finally:
-                Path(temporary).unlink(missing_ok=True)
+                try:
+                    os.unlink(_win_safe(temporary))
+                except OSError:
+                    pass
 
         try:
             for path, data in writes:
@@ -251,7 +260,10 @@ class Publisher:
             for path in reversed(attempted):
                 try:
                     if originals[path] is None:
-                        path.unlink(missing_ok=True)
+                        try:
+                            os.unlink(_win_safe(path))
+                        except OSError:
+                            pass
                     else:
                         replace_bytes(path, originals[path])
                 except BaseException as rollback_error:
