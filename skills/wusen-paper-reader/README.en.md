@@ -89,7 +89,7 @@ Use supported Zotero integrations or verified read-only export interfaces. Do no
 
 ## Validation and limits
 
-See [evaluation cases and coverage](evals/README.md). Initial domain development focuses on materials science and chemistry; it does not imply comprehensive validation across subfields.
+Initial domain development focuses on materials science and chemistry; it does not imply comprehensive validation across subfields.
 
 Mechanical checks do not validate page numbers, figure identifiers, semantic support, or scientific correctness. Separate author-reported findings, assistant interpretations, and hypotheses. Answers from a personal library are not automatically systematic reviews.
 

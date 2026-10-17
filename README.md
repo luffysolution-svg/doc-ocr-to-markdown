@@ -75,6 +75,17 @@ npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
 
 [查看完整说明与案例 →](skills/wusen-doc2md/README.md)
 
+### wusen-paper-reader
+
+面向已有论文、SI、Zotero 附件与解析后的 Markdown，支持深入精读与知识积累，重点对齐证据边界与实验条件。
+
+- **按场景分层**：支持单篇精读、跨文献对比、跨学科迁移、跨主题综合与知识库问答五大场景。
+- **严谨证据核对**：区分观测事实、作者推断与假设，保留测试条件、误差定义与未获取项。
+- **材料与化学优化**：针对合成表征、催化电化学、DFT计算、光谱机理和性能比较定制检查规则。
+- **离线证据工具**：内置标准库校验脚本，支持引用原文与哈希核验，保护个人文献隐私。
+
+[查看完整说明与案例 →](skills/wusen-paper-reader/README.md)
+
 ## 使用说明
 
 安装后，在支持 Agent Skills 的 AI 助手中描述任务即可，例如：

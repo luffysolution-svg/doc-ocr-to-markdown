@@ -75,6 +75,17 @@ A workflow for academic documents with dense formulas, complex figures, and chal
 
 [Explore the full guide and examples →](skills/wusen-doc2md/README.en.md)
 
+### wusen-paper-reader
+
+Interprets papers, supporting information, Zotero attachments, and Markdown notes with condition-aware claim extraction and traceable evidence.
+
+- **Scenario-based workflows**: single-paper reading, cross-paper comparison, interdisciplinary transfer, cross-topic synthesis, and library questions.
+- **Evidence-grounded claims**: separate observed facts from author claims and hypotheses; retain test conditions, uncertainty definitions, and unretrieved items.
+- **Materials and chemistry checks**: specialized domain rules for synthesis and characterization, catalysis and electrochemistry, DFT computation, spectroscopy mechanisms, and performance benchmarks.
+- **Offline evidence verification**: standard-library Python tools to verify source hashes and quoted text without exposing private documents to external networks.
+
+[Explore the full guide and examples →](skills/wusen-paper-reader/README.en.md)
+
 ## Usage
 
 After installation, describe your task in an AI assistant that supports Agent Skills. For example:
