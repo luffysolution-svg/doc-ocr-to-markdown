@@ -232,19 +232,19 @@ class OCRTests(unittest.TestCase):
             ocr.submit(self.submit_args())
         self.assertNotIn(SECRET, str(error.exception))
         self.assertEqual(api.call_count, 1)
-        self.assertEqual(json.loads((self.work / 'job.json').read_text())['files'][0]['upload_state'], 'pending')
+        self.assertEqual(json.loads((self.work / 'job.json').read_text(encoding='utf-8'))['files'][0]['upload_state'], 'pending')
 
     def test_post_response_loss_never_recreates_batch(self):
         with patch.object(ocr.requests, 'request', side_effect=requests.Timeout(SECRET)) as request, \
                 self.assertRaises(ocr.TransferError):
             ocr.submit(self.submit_args())
         self.assertEqual(request.call_count, 1)
-        self.assertEqual(json.loads((self.work / 'job.json').read_text())['state'], 'creation_pending')
+        self.assertEqual(json.loads((self.work / 'job.json').read_text(encoding='utf-8'))['state'], 'creation_pending')
         with patch.object(ocr, 'api') as api, self.assertRaisesRegex(ValueError, '禁止自动重建'):
             ocr.resume(self.resume_args())
         api.assert_not_called()
         recovery = self.root / 'private.json'
-        recovery.write_text(json.dumps({'data': {'batch_id': 'batch-1', 'file_urls': [SECRET]}}))
+        recovery.write_text(json.dumps({'data': {'batch_id': 'batch-1', 'file_urls': [SECRET]}}), encoding='utf-8')
         with patch.object(ocr, 'api', return_value={'extract_result': []}) as api, \
                 patch.object(ocr.requests, 'put', return_value=response()), patch.object(ocr, 'collect'):
             ocr.resume(self.resume_args(batch_response=str(recovery)))
@@ -254,7 +254,7 @@ class OCRTests(unittest.TestCase):
         with patch.object(ocr, 'api', return_value={'batch_id': 'batch-1', 'file_urls': []}), \
                 self.assertRaisesRegex(ValueError, '数量'):
             ocr.submit(self.submit_args())
-        saved = json.loads((self.work / 'job.json').read_text())
+        saved = json.loads((self.work / 'job.json').read_text(encoding='utf-8'))
         self.assertEqual(saved['batch_id'], 'batch-1')
         ocr.requests.put.assert_not_called()
 
@@ -264,7 +264,7 @@ class OCRTests(unittest.TestCase):
                 patch.object(ocr, 'collect'):
             ocr.resume(self.resume_args())
         ocr.requests.put.assert_not_called()
-        self.assertEqual(json.loads((self.work / 'job.json').read_text())['files'][0]['upload_state'], 'uploaded')
+        self.assertEqual(json.loads((self.work / 'job.json').read_text(encoding='utf-8'))['files'][0]['upload_state'], 'uploaded')
 
     def test_legacy_job_can_collect_already_accepted_results(self):
         job = self.job()
@@ -464,7 +464,7 @@ class OCRTests(unittest.TestCase):
                 self.assertRaises(ocr.TransferError) as error:
             ocr.collect(self.work, job, interval=1, timeout=30, quiet=True)
         self.assertNotIn('TOP_SECRET', str(error.exception))
-        self.assertNotIn('TOP_SECRET', (self.work / 'status.json').read_text())
+        self.assertNotIn('TOP_SECRET', (self.work / 'status.json').read_text(encoding='utf-8'))
         self.assertTrue(ocr.extracted_ok(self.work / 'raw/f02'))
 
     def test_status_only_persists_allowlisted_fields(self):
@@ -475,7 +475,7 @@ class OCRTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as output:
             ocr.status(self.resume_args())
         self.assertNotIn('TOP_SECRET', output.getvalue())
-        self.assertNotIn('TOP_SECRET', (self.work / 'status.json').read_text())
+        self.assertNotIn('TOP_SECRET', (self.work / 'status.json').read_text(encoding='utf-8'))
 
     def test_unknown_and_duplicate_result_ids_rejected(self):
         job = self.job()

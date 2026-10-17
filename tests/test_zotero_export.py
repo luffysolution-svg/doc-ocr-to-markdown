@@ -148,7 +148,7 @@ class ZoteroExportTests(unittest.TestCase):
         self.assertEqual(first[0]['sha256'], first[1]['sha256'])
         self.assertEqual(first[1]['metadata']['key'], 'PAPER002')
         self.assertEqual(len(list((self.out / 'sources').glob('*.pdf'))), 1)
-        self.assertEqual(len((self.out / 'ids.tsv').read_text().splitlines()), 1)
+        self.assertEqual(len((self.out / 'ids.tsv').read_text(encoding='utf-8').splitlines()), 1)
         self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before})
 
     def test_no_pdf_and_excluded_deleted_nonpaper_types(self):
@@ -173,7 +173,7 @@ class ZoteroExportTests(unittest.TestCase):
             records = export.export_library(self.out, base)
         self.assertEqual([r['status'] for r in records], ['error'] * 4 + ['ready'])
         self.assertTrue(all(r.get('error') for r in records[:4]))
-        self.assertEqual(len((self.out / 'ids.tsv').read_text().splitlines()), 1)
+        self.assertEqual(len((self.out / 'ids.tsv').read_text(encoding='utf-8').splitlines()), 1)
 
     def test_network_file_and_http_redirects_never_followed(self):
         locations = ['file://server/share/a.pdf', 'file://localhost/share/a.pdf',
@@ -223,7 +223,7 @@ class ZoteroExportTests(unittest.TestCase):
             records = export.export_library(self.out, base)
         self.assertEqual([r['status'] for r in records], ['error', 'ready'])
         self.assertEqual(records[1]['id'], 'PAPER001-ATTACH02')
-        self.assertIn('\tPAPER001-ATTACH02\n', (self.out / 'ids.tsv').read_text())
+        self.assertIn('\tPAPER001-ATTACH02\n', (self.out / 'ids.tsv').read_text(encoding='utf-8'))
 
     def test_interrupted_http_body_isolated_and_next_paper_exported(self):
         top = [paper('PAPER001'), paper('PAPER002')]
@@ -248,7 +248,7 @@ class ZoteroExportTests(unittest.TestCase):
             records = export.export_library(self.out, base)
         self.assertEqual([r['status'] for r in records], ['ready', 'ready'])
         self.assertNotEqual(records[0]['sha256'], records[1]['sha256'])
-        self.assertEqual(len((self.out / 'ids.tsv').read_text().splitlines()), 2)
+        self.assertEqual(len((self.out / 'ids.tsv').read_text(encoding='utf-8').splitlines()), 2)
 
     def test_changed_existing_pdf_is_preserved_and_reported(self):
         dest = self.out / 'sources/PAPER001-ATTACH01.pdf'
@@ -361,7 +361,7 @@ class ExportRefreshTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'refusing overwrite'):
                     export.export_library(out, base, refresh=True)
                 self.assertEqual((out / 'library.json').read_bytes(), before)
-                self.assertEqual((out / 'ids.tsv').read_text(), 'Human edited\n')
+                self.assertEqual((out / 'ids.tsv').read_text(encoding='utf-8'), 'Human edited\n')
 
     def test_children_and_annotations_paginate_without_following_next_link(self):
         import zotero_sync
@@ -398,9 +398,9 @@ class ExportRefreshTests(unittest.TestCase):
             self.assertEqual(export.read_owned(path, 'owner'), {'value': 1})
             with self.assertRaisesRegex(ValueError, 'Unowned'):
                 export.read_owned(path, 'someone else')
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding='utf-8'))
             data['payload']['value'] = 'human edit'
-            path.write_text(json.dumps(data))
+            path.write_text(json.dumps(data), encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'manually edited'):
                 export.write_owned(path, {'value': 2}, 'owner')
 
