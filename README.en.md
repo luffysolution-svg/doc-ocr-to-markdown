@@ -1,12 +1,12 @@
 <div align="center">
 
-# wusen-skills
+# sanmu-skills
 
-**Wusen's Agent Skills collection**
+**Sanmu's Agent Skills collection**
 
 Practical workflows, packaged as reusable skills for AI assistants.
 
-[![Tests](https://github.com/luffysolution-svg/wusen-skills/actions/workflows/tests.yml/badge.svg)](https://github.com/luffysolution-svg/wusen-skills/actions/workflows/tests.yml)
+[![Tests](https://github.com/luffysolution-svg/sanmu-skills/actions/workflows/tests.yml/badge.svg)](https://github.com/luffysolution-svg/sanmu-skills/actions/workflows/tests.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [简体中文](README.md) · **English**
@@ -22,31 +22,31 @@ Practical workflows, packaged as reusable skills for AI assistants.
 Copy this prompt into your coding assistant:
 
 ```text
-Please install and configure Wusen's wusen-skills collection:
-https://github.com/luffysolution-svg/wusen-skills
+Please install and configure Sanmu's sanmu-skills collection:
+https://github.com/luffysolution-svg/sanmu-skills
 
 1. Check Git and Node.js, then install the collection for the current AI assistant at user scope:
-   npx skills add luffysolution-svg/wusen-skills --skill '*' -g
+   npx skills add luffysolution-svg/sanmu-skills --skill '*' -g
    Select the target matching the current assistant and check for local edits before updating an existing installation.
 2. Read each installed skill's README and configure its dependencies.
-3. For wusen-doc2md, enter the skill directory containing SKILL.md, prefer a dedicated Python virtual environment, and run:
+3. For sanmu-doc2md, enter the skill directory containing SKILL.md, prefer a dedicated Python virtual environment, and run:
    python -m pip install -r requirements.txt
    npm --prefix scripts install --ignore-scripts --no-audit --no-fund
    python scripts/doctor.py
    python -m unittest discover -s tests -v
 4. Check MINERU_API_TOKEN configuration without displaying its value. If missing, direct me to https://mineru.net and explain how to set it locally.
-5. For wusen-paper-reader, use Python 3.10+ to run python -m unittest discover -s tests -v from its skill directory. Its evidence tools have no third-party dependencies; check PDF/OCR/Zotero integrations only as needed.
+5. For sanmu-paper-reader, use Python 3.10+ to run python -m unittest discover -s tests -v from its skill directory. Its evidence tools have no third-party dependencies; check PDF/OCR/Zotero integrations only as needed.
 6. Report installation paths, validation results, and any remaining configuration steps.
 ```
 
-Full AI installation instructions: [Document conversion](skills/wusen-doc2md/README.en.md#option-1-ask-your-ai-assistant-to-install-and-configure-it-recommended) · [Paper reading](skills/wusen-paper-reader/README.en.md#ask-your-ai-assistant-to-install-it-recommended)
+Full AI installation instructions: [Document conversion](skills/sanmu-doc2md/README.en.md#option-1-ask-your-ai-assistant-to-install-and-configure-it-recommended) · [Paper reading](skills/sanmu-paper-reader/README.en.md#ask-your-ai-assistant-to-install-it-recommended)
 
 ### Command-line installation
 
 Install the entire collection to your user directory:
 
 ```bash
-npx skills add luffysolution-svg/wusen-skills --skill '*' -g
+npx skills add luffysolution-svg/sanmu-skills --skill '*' -g
 ```
 
 The installer guides you through selecting an AI assistant and an installation method. Git and a Node.js version supported by the [skills CLI](https://github.com/vercel-labs/skills) are required.
@@ -54,17 +54,17 @@ The installer guides you through selecting an AI assistant and an installation m
 Install a specific skill:
 
 ```bash
-npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
+npx skills add luffysolution-svg/sanmu-skills --skill sanmu-doc2md -g
 ```
 
 ## Skills
 
 | Skill | Purpose | Documentation |
 | --- | --- | --- |
-| **wusen-doc2md** | Turn papers, textbooks, and slides into a Markdown knowledge base with LaTeX formulas, high-resolution figures, and Zotero metadata. | [Usage guide](skills/wusen-doc2md/README.en.md) |
-| **wusen-paper-reader** | Evidence-grounded paper reading, cross-paper comparison, interdisciplinary transfer, cross-topic synthesis, and library questions, with materials and chemistry checks. | [Usage guide](skills/wusen-paper-reader/README.en.md) |
+| **sanmu-doc2md** | Turn papers, textbooks, and slides into a Markdown knowledge base with LaTeX formulas, high-resolution figures, and Zotero metadata. | [Usage guide](skills/sanmu-doc2md/README.en.md) |
+| **sanmu-paper-reader** | Evidence-grounded paper reading, cross-paper comparison, interdisciplinary transfer, cross-topic synthesis, and library questions, with materials and chemistry checks. | [Usage guide](skills/sanmu-paper-reader/README.en.md) |
 
-### wusen-doc2md
+### sanmu-doc2md
 
 A workflow for academic documents with dense formulas, complex figures, and challenging layouts, covering recognition, correction, knowledge-base assembly, and validation.
 
@@ -73,9 +73,9 @@ A workflow for academic documents with dense formulas, complex figures, and chal
 - **Reference management**: Zotero metadata, annotation synchronization, and links between papers and supporting information.
 - **Maintainable output**: relative paths, dedicated image directories, external build state, and guarded incremental updates.
 
-[Explore the full guide and examples →](skills/wusen-doc2md/README.en.md)
+[Explore the full guide and examples →](skills/sanmu-doc2md/README.en.md)
 
-### wusen-paper-reader
+### sanmu-paper-reader
 
 Interprets papers, supporting information, Zotero attachments, and Markdown notes with condition-aware claim extraction and traceable evidence.
 
@@ -83,6 +83,8 @@ Interprets papers, supporting information, Zotero attachments, and Markdown note
 - **Evidence-grounded claims**: separate observed facts from author claims and hypotheses; retain test conditions, uncertainty definitions, and unretrieved items.
 - **Materials and chemistry checks**: specialized domain rules for synthesis and characterization, catalysis and electrochemistry, DFT computation, spectroscopy mechanisms, and performance benchmarks.
 - **Offline evidence verification**: standard-library Python tools to verify source hashes and quoted text without exposing private documents to external networks.
+
+[Explore the full guide and examples →](skills/sanmu-paper-reader/README.en.md)
 
 [Explore the full guide and examples →](skills/wusen-paper-reader/README.en.md) · [Browse the benchmark showcase →](skills/wusen-paper-reader/examples/Yang-et-al-2024-Advanced-Materials/README.md)
 

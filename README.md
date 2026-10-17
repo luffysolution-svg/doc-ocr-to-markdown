@@ -1,12 +1,12 @@
 <div align="center">
 
-# wusen-skills
+# sanmu-skills
 
-**吴森的 Agent Skills 合集**
+**三木的 Agent Skills 合集**
 
 把实际使用中沉淀的工作方法，整理成可安装、可复用的技能。
 
-[![自动化测试](https://github.com/luffysolution-svg/wusen-skills/actions/workflows/tests.yml/badge.svg)](https://github.com/luffysolution-svg/wusen-skills/actions/workflows/tests.yml)
+[![自动化测试](https://github.com/luffysolution-svg/sanmu-skills/actions/workflows/tests.yml/badge.svg)](https://github.com/luffysolution-svg/sanmu-skills/actions/workflows/tests.yml)
 [![MIT 许可证](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **简体中文** · [English](README.en.md)
@@ -22,31 +22,31 @@
 复制下面的指令，发给你正在使用的 AI 编码助手：
 
 ```text
-请帮我安装并配置吴森的 wusen-skills 技能合集：
-https://github.com/luffysolution-svg/wusen-skills
+请帮我安装并配置三木的 sanmu-skills 技能合集：
+https://github.com/luffysolution-svg/sanmu-skills
 
 1. 检查 Git 和 Node.js，通过以下命令安装合集到当前 AI 助手的用户级技能目录：
-   npx skills add luffysolution-svg/wusen-skills --skill '*' -g
+   npx skills add luffysolution-svg/sanmu-skills --skill '*' -g
    选择当前助手对应的安装目标；已有安装时先检查本地修改。
 2. 阅读已安装技能的 README，按各自要求配置依赖。
-3. 对 wusen-doc2md，进入包含 SKILL.md 的技能目录，优先使用独立 Python 虚拟环境，再执行：
+3. 对 sanmu-doc2md，进入包含 SKILL.md 的技能目录，优先使用独立 Python 虚拟环境，再执行：
    python -m pip install -r requirements.txt
    npm --prefix scripts install --ignore-scripts --no-audit --no-fund
    python scripts/doctor.py
    python -m unittest discover -s tests -v
 4. 检查 MINERU_API_TOKEN 配置状态，不显示凭证值；未配置时指导我从 https://mineru.net 获取并在本地设置。
-5. 对 wusen-paper-reader，使用 Python 3.10+ 从技能目录执行 python -m unittest discover -s tests -v；附带证据工具无第三方依赖，PDF/OCR/Zotero按实际输入检查可用性。
+5. 对 sanmu-paper-reader，使用 Python 3.10+ 从技能目录执行 python -m unittest discover -s tests -v；附带证据工具无第三方依赖，PDF/OCR/Zotero按实际输入检查可用性。
 6. 汇报安装位置、验证结果和仍需配置的项目。
 ```
 
-完整 AI 安装指令：[文档解析](skills/wusen-doc2md/README.md#方式一让-ai-助手安装配置推荐) · [文献解读](skills/wusen-paper-reader/README.md#让ai助手安装推荐)
+完整 AI 安装指令：[文档解析](skills/sanmu-doc2md/README.md#方式一让-ai-助手安装配置推荐) · [文献解读](skills/sanmu-paper-reader/README.md#让ai助手安装推荐)
 
 ### 命令行安装
 
 安装整个合集到用户目录：
 
 ```bash
-npx skills add luffysolution-svg/wusen-skills --skill '*' -g
+npx skills add luffysolution-svg/sanmu-skills --skill '*' -g
 ```
 
 安装器会引导你选择目标 AI 助手和安装方式。需要 Git 和满足 [skills 安装器要求](https://github.com/vercel-labs/skills) 的 Node.js。
@@ -54,17 +54,17 @@ npx skills add luffysolution-svg/wusen-skills --skill '*' -g
 只安装指定技能：
 
 ```bash
-npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
+npx skills add luffysolution-svg/sanmu-skills --skill sanmu-doc2md -g
 ```
 
 ## 技能目录
 
 | 技能 | 用途 | 文档 |
 | --- | --- | --- |
-| **wusen-doc2md** | 将论文、教材和课件整理成保留 LaTeX 公式、高清图表与 Zotero 元数据的 Markdown 知识库。 | [使用指南](skills/wusen-doc2md/README.md) |
-| **wusen-paper-reader** | 单篇精读、跨文献对比、跨学科与跨主题解读及知识库问答，优先材料与化学，保留可追溯证据。 | [使用指南](skills/wusen-paper-reader/README.md) |
+| **sanmu-doc2md** | 将论文、教材和课件整理成保留 LaTeX 公式、高清图表与 Zotero 元数据的 Markdown 知识库。 | [使用指南](skills/sanmu-doc2md/README.md) |
+| **sanmu-paper-reader** | 单篇精读、跨文献对比、跨学科与跨主题解读及知识库问答，优先材料与化学，保留可追溯证据。 | [使用指南](skills/sanmu-paper-reader/README.md) |
 
-### wusen-doc2md
+### sanmu-doc2md
 
 面向公式多、图表多、版面复杂的学术文档，覆盖从识别、校对到知识库装配与校验的完整流程。
 
@@ -73,9 +73,9 @@ npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
 - **连接文献管理**：支持 Zotero 元数据、批注同步与主文/补充材料双链。
 - **便于长期维护**：相对路径、独立图片目录、外置构建状态与受保护的增量更新。
 
-[查看完整说明与案例 →](skills/wusen-doc2md/README.md)
+[查看完整说明与案例 →](skills/sanmu-doc2md/README.md)
 
-### wusen-paper-reader
+### sanmu-paper-reader
 
 面向已有论文、SI、Zotero 附件与解析后的 Markdown，支持深入精读与知识积累，重点对齐证据边界与实验条件。
 
@@ -85,7 +85,7 @@ npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
 - **原生 Mermaid 机制流与 SI 探针**：零报错渲染能带电荷流与 FLPs 水分子极化；毫秒级穿透 50+ 页 SI 并全量提取高清附图。
 - **基准入库与学术标签**：自动提取核心催化指标追加录入 `benchmarks.csv`，并同步反哺 Zotero 学术标签。
 
-[查看使用指南与完整效果展示 →](skills/wusen-paper-reader/README.md) · [直接浏览顶刊精读样本 →](skills/wusen-paper-reader/examples/Yang-et-al-2024-Advanced-Materials/README.md)
+[查看使用指南与完整效果展示 →](skills/sanmu-paper-reader/README.md)
 
 ## 使用说明
 

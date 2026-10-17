@@ -1,0 +1,9 @@
+{
+  "name": "sanmu-doc2md-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "KaTeX validation and preview support for the sanmu-doc2md skill",
+  "dependencies": {
+    "katex": "^0.19.0"
+  }
+}
