@@ -59,8 +59,6 @@ The repository was renamed from `doc-ocr-to-markdown`. Update your Git remote an
 
 ## 开发与验证 / Development
 
-本轮规范检查、文档修订与验证记录见 [Skill 质检记录](docs/skill-quality-review.md)。
-
 每个技能放在 `skills/<name>/` 下，`SKILL.md` 的 `name` 与目录名一致。合集根目录不放 `SKILL.md`。
 
 ```bash

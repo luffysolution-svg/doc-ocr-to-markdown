@@ -88,8 +88,7 @@ images/                       # 切出的插图
 | `chart` | `img_path`, `chart_caption`, `chart_footnote`, `bbox` | 图表（曲线图等），字段名与 image 不同 |
 | `table` | `table_body`(HTML), `table_caption`, `table_footnote` | 表格，body 是 HTML 需转换 |
 | `list` | `list_items` | 列表 |
-| `header`/`footer`/`page_number` | `text` | 运行页眉、页脚与页码，确认后过滤 |
-| `page_footnote` | `text` | 实质脚注保留；归属或类型不明确时回源核验 |
+| `header`/`footer`/`page_number`/`page_footnote` | `text` | 页眉页脚页码，应丢弃 |
 
 **注意 `image` 和 `chart` 是两种类型，字段名不同**（`image_caption` vs `chart_caption`）。只处理 `image` 会漏掉所有曲线图。
 

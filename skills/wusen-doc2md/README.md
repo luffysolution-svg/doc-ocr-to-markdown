@@ -46,10 +46,10 @@
 ## 包含什么
 
 ```text
-SKILL.md                        技能定义、执行准则与 13 项反模式清单
+SKILL.md                        技能定义、执行准则与 10 大反模式清单
 references/
   mineru-api.md                 MinerU API 契约、归一化坐标与 DoH 连接策略
-  math-normalization.md         16 条科学公式归一化规则，附真实前后对照
+  math-normalization.md         14 条科学公式归一化规则，附真实前后对照
   book-workflow.md              超长教材与学术专著分片识别、重组指引
   research-documents.md         学术论文与学位论文标准命名、frontmatter 与双栏规范
 scripts/
@@ -79,7 +79,7 @@ examples/
         │
 [4. 图表回源保真]  ── 提取内嵌原图 / PDF 3× 高清重裁，多面板外接矩形合并，保留表内二维码
         │
-[5. 公式规范归一]  ── 16 条规则标准化（中文进 \text、不等号转义、方括号防劫持、标题公式保全）
+[5. 公式规范归一]  ── 14 条规则标准化（中文进 \text、不等号转义、方括号防劫持、标题公式保全）
         │
 [6. 知识库组装]    ── 自然混排或视觉置顶，生成 00-目录.md 导航，可选 --prune-orphans 清理孤儿切图
         │
@@ -109,44 +109,25 @@ examples/
 ### 安装技能
 
 ```bash
+# 安装单个技能（全局）
 npx skills add luffysolution-svg/wusen-skills --skill wusen-doc2md -g
+
+# 安装整个合集（全局）
+npx skills add luffysolution-svg/wusen-skills --skill '*' -g
 ```
 
-安装后进入包含本技能 `SKILL.md` 的目录。共享目录通常是 `~/.agents/skills/wusen-doc2md`，实际路径以安装器输出为准。下面的命令均从该技能目录运行。
-
-### 配置运行环境
-
-建议使用独立 Python 虚拟环境，避免改动系统 Python。要求 Python 3.10+ 和 Node.js 22.20+。
-
-```bash
-python -m venv .venv
-```
-
-激活环境：macOS/Linux 使用 `source .venv/bin/activate`；Windows PowerShell 使用 `.venv\Scripts\Activate.ps1`。也可让 AI 助手直接调用虚拟环境内的 Python，无须激活。
+进入安装器输出的 `wusen-doc2md` 技能目录（包含 `SKILL.md`）；从源码运行时先进入 `skills/wusen-doc2md`。下列依赖和常用命令均相对该目录执行。
 
 ```bash
 python -m pip install -r requirements.txt
 npm --prefix scripts install --ignore-scripts --no-audit --no-fund
 python scripts/doctor.py
-```
-
-`doctor.py` 只检查当前 Python、依赖、Node.js、KaTeX 和凭证配置状态，不安装依赖、不发起网络请求，也不输出凭证值。可加 `--json` 获取结构化结果。
-
-云端 OCR 另外需要设置 `MINERU_API_TOKEN`（从 [mineru.net](https://mineru.net) 获取），然后检查：
-
-```bash
-python scripts/doctor.py --require-ocr
-```
-
-未设置凭证时，普通检查会提示云端 OCR 不可用；已满足依赖的本地装配、校验和预览仍可使用。`--require-ocr` 会将缺少凭证视为失败。退出码 `0` 表示所需检查通过，`1` 表示运行环境不完整。
-
-### 验证安装
-
-```bash
 python -m unittest discover -s tests -v
 ```
 
-Install with the shared `skills` CLI, enter the installed skill directory, create a Python virtual environment, install `requirements.txt` and the Node dependencies under `scripts/`, then run `python scripts/doctor.py`. Cloud OCR additionally requires `MINERU_API_TOKEN`.
+可先创建 Python 虚拟环境再安装依赖。`doctor.py` 只检查环境与凭证配置状态，不安装依赖、不输出凭证值；`--json` 输出结构化结果。
+
+云端 OCR 需要设置 `MINERU_API_TOKEN`（获取方式见 [mineru.net](https://mineru.net)）。使用 `python scripts/doctor.py --require-ocr` 将缺少凭证视为检查失败；未配置凭证不影响满足依赖的本地装配与校验。
 
 ---
 
@@ -186,7 +167,7 @@ python scripts/extract_formulas.py ./知识库 --out formulas.json
 node scripts/validate_math.cjs formulas.json
 
 # 8. 本地离线预览验证沙箱
-python scripts/preview_server.py ./知识库 --port 8766 --katex-dir scripts/node_modules/katex/dist
+python scripts/preview_server.py ./知识库 --port 8766
 ```
 
 ---

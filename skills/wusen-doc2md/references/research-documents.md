@@ -31,9 +31,9 @@
 
 ### 模式 B：独立 PDF 与 Word 衍生文件
 - 无需依赖 Zotero，直接传入本地文件（如 `--pdf ./paper.pdf`）。
-- **元数据来源与校验**：
-  1. **文件名仅作回退**：文件名不自动解析为作者与出版年份；字段不足时保留安全清洗后的文件名，并提示回源补充。不能把貌似规范的文件名直接当作已核实的书目信息；
-  2. **PDF 属性与首页交叉核对**：标题、DOI 等候选需有可核对依据；不把 Office 用户名视为作者，也不把 PDF 创建时间当作出版年份。Word 需要先转换为 PDF，当前没有直接读取 docx 属性的入口；
+- **元数据智能推断与提取**：
+  1. **文件名模式解析**：若文件名符合 `[作者] - [年份] - [标题]` 常见模式（如 `Vaswani et al - 2017 - Attention Is All You Need.pdf`），自动解析第一作者（英文提取姓氏并补全 `等`，中文取全名）、4 位公历年份与标题；
+  2. **文档内嵌属性**：读取 PDF properties / XMP（如 Word 导出时记录的 Author、Title、CreationDate），提取作者与年份候选；
   3. **公开 DOI 查询（可选）**：通过 `--crossref` 显式开启 Crossref 校验补全，仅当 DOI 与规范化标题双重吻合时才采纳字段；
   4. **规范 JSON 覆盖（可选）**：可通过 `--metadata ./meta.json` 显式传入由原文核对的字段。
 
@@ -141,7 +141,7 @@ zotero_item_uri: "zotero://select/library/items/ABCD2345"
      ```
    - 通过 `--repairs ./repairs.json` 注入修复，原始 OCR 数据文件零修改，所有更正由外部账本可追溯复现。
 3. **科学结构保真**：
-   - 科研装配入口默认启用表格原版裁图保留；通用 `build_markdown.py` 入口使用 `--keep-table-images` 显式开启，科研入口无需也不接受该参数；
+   - 复杂表格同时保留 Markdown 表格与原版高清裁图（`--keep-table-images`）；
    - 二维化学结构与图中复杂式子保留原版高清切片，杜绝语法失真。
 
 ---

@@ -3,7 +3,7 @@
 
 --raw accepts one item directory, a raw root containing item directories, or an
 OCR workspace with raw/. A multi-item root requires --id (or a unique exported
-item identity). --out is this document's delivery directory (academically named Markdown + navigation
+item identity). --out is this document's delivery directory (原文.md + navigation
 + images). Work state stays outside it. This command never submits/uploads OCR.
 """
 from __future__ import annotations
