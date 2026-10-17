@@ -23,7 +23,7 @@ class EvidenceToolsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.base = Path(self.temp.name)
+        self.base = Path(self.temp.name).resolve()
         self.root = self.base / "root"
         self.root.mkdir()
         self.source = self.root / "a.md"
@@ -262,7 +262,7 @@ class EvidenceToolsTests(unittest.TestCase):
         self.ledger_with()
         original = tools.read_bytes
         def read(path):
-            if path == self.source:
+            if path.resolve() == self.source.resolve():
                 raise PermissionError(13, "denied", str(path))
             return original(path)
         with mock.patch.object(tools, "read_bytes", side_effect=read):
